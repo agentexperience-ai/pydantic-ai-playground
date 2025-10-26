@@ -1143,7 +1143,7 @@ const Example = () => {
               </PromptInputModelSelectContent>
             </PromptInputModelSelect>
           </PromptInputTools>
-          <PromptInputSubmit className="!h-8" status={status} />
+          <PromptInputSubmit className="h-8!" status={status} />
         </PromptInputFooter>
       </PromptInput>
     </div>
