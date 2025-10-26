@@ -1,10 +1,11 @@
 #!/bin/bash
 
 # ChatKit Server Startup Script
-# This script starts the ChatKit server and MCP memory server
+# This script starts the ChatKit server, MCP memory server, and frontend
 
 CHATKIT_PORT=8000
 MCP_PORT=8001
+FRONTEND_PORT=3000
 HOST="127.0.0.1"
 
 # Function to kill processes using the port
@@ -77,6 +78,17 @@ echo ""
 echo "🛑 Clearing ports..."
 kill_port_processes $CHATKIT_PORT
 kill_port_processes $MCP_PORT
+kill_port_processes $FRONTEND_PORT
+
+# Kill any Next.js development processes
+echo ""
+echo "🛑 Killing Next.js development processes..."
+pkill -f "next dev" 2>/dev/null || true
+
+# Remove Next.js lock file
+echo ""
+echo "🛑 Removing Next.js lock files..."
+rm -rf frontend/.next/dev/lock 2>/dev/null || true
 
 # Check if ports are available
 echo ""
@@ -93,12 +105,46 @@ if ! check_port $MCP_PORT; then
     exit 1
 fi
 
+if ! check_port $FRONTEND_PORT; then
+    echo "💡 Port $FRONTEND_PORT is still in use. Please check manually:"
+    echo "   lsof -i :$FRONTEND_PORT"
+    exit 1
+fi
+
 echo ""
 echo "🎯 Starting servers..."
 echo "   ChatKit Server: http://$HOST:$CHATKIT_PORT"
 echo "   MCP Memory Server: http://$HOST:$MCP_PORT"
+echo "   Frontend: http://$HOST:$FRONTEND_PORT"
 echo ""
 
-# Start the main ChatKit server
+# Start the main ChatKit server in background
 echo "🚀 Starting ChatKit server..."
-uv run chatkit --host "$HOST" --port "$CHATKIT_PORT"
+uv run chatkit --host "$HOST" --port "$CHATKIT_PORT" &
+CHATKIT_PID=$!
+
+# Wait a moment for the backend to start
+sleep 3
+
+# Start the frontend
+echo ""
+echo "🚀 Starting frontend..."
+cd frontend
+npm run dev &
+FRONTEND_PID=$!
+cd ..
+
+# Wait for processes
+echo ""
+echo "✅ All servers started!"
+echo "   Backend PID: $CHATKIT_PID"
+echo "   Frontend PID: $FRONTEND_PID"
+echo ""
+echo "📝 To stop all servers, run: kill $CHATKIT_PID $FRONTEND_PID"
+echo ""
+
+# Wait for user interrupt
+trap "echo ''; echo '🛑 Stopping servers...'; kill $CHATKIT_PID $FRONTEND_PID 2>/dev/null; exit 0" INT
+
+# Keep script running
+wait
