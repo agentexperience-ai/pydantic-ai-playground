@@ -2,14 +2,72 @@
 
 from typing import AsyncIterator, Any, Dict, List, Optional
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.exceptions import ModelRetry, AgentRunError, ModelHTTPError, UnexpectedModelBehavior
 import asyncio
 import os
+import yaml
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+
+def load_system_config():
+    """Load system configuration from YAML file"""
+    config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    # Extract the XML system prompt from YAML
+    xml_prompt = config.get('xml_system_prompt', '')
+
+    # Extract the MinimalSystemPrompt from XML structure
+    if '<MinimalSystemPrompt>' in xml_prompt:
+        # Find the MinimalSystemPrompt section
+        start = xml_prompt.find('<MinimalSystemPrompt>') + len('<MinimalSystemPrompt>')
+        end = xml_prompt.find('</MinimalSystemPrompt>')
+        minimal_prompt = xml_prompt[start:end].strip()
+
+        # Extract content from CDATA section
+        if '<![CDATA[' in minimal_prompt and ']]>' in minimal_prompt:
+            cdata_start = minimal_prompt.find('<![CDATA[') + 9
+            cdata_end = minimal_prompt.find(']]>')
+            return minimal_prompt[cdata_start:cdata_end].strip()
+
+    # Fallback to default prompt
+    return """Role: Careful, helpful Claude for ChatKit memory-enabled conversations.
+
+CRITICAL INSTRUCTIONS - YOU MUST FOLLOW THESE EXACTLY:
+1. AUTOMATIC TOOL USAGE - You MUST use memory tools automatically without being asked:
+   - When user says ANYTHING like "I'm X", "my name is X", "call me X" → IMMEDIATELY use store_personal_info tool
+   - When user asks "what's my name", "do you remember X", "what do you know about me" → IMMEDIATELY use view_memory tool
+   - When user shares preferences, facts, or important information → use add_fact tool
+
+2. TOOL EXECUTION ORDER:
+   - First: Detect if user message contains personal information → use store_personal_info
+   - Second: If user asks about stored information → use view_memory
+   - Third: Respond to user based on tool results
+
+3. MEMORY TOOLS AVAILABLE:
+   - store_personal_info: Automatically detect and store names from user messages
+   - view_memory: Retrieve stored information and memory summary
+   - add_fact: Store important user preferences and facts
+   - add_note: Store general notes about conversations
+
+4. ALWAYS:
+   - Use tools proactively - don't wait for user to ask
+   - Verify tool execution and handle failures gracefully
+   - Follow tool schemas exactly
+   - Format responses with clear CommonMark
+   - Be concise and helpful
+   - Follow safety policy; refuse unsafe requests
+
+EXAMPLES:
+User: "Hello, I'm user_name" → You: [use store_personal_info] → "Hello user_name! How can I help?"
+User: "What's my name?" → You: [use view_memory] → "Your name is user_name!"
+"""
 
 
 class ChatMessage(BaseModel):
@@ -49,12 +107,19 @@ class ChatKitAgent:
                 "Please set it in your .env file or environment."
             )
 
+        # Import memory toolset
+        from .tools import memory_toolset
+
+        # Load system configuration from XML
+        system_prompt = load_system_config()
+
+        # Create agent with memory toolset
         self.agent = Agent(
             model=self.model,
-            system_prompt="""You are a helpful, friendly assistant.
-            Provide clear, concise responses and be proactive in helping users.
-            Use tools when available to provide better assistance.""",
+            system_prompt=system_prompt,
+            toolsets=[memory_toolset]
         )
+
         self.sessions: Dict[str, ChatSession] = {}
 
     def create_session(self, session_id: Optional[str] = None) -> ChatSession:

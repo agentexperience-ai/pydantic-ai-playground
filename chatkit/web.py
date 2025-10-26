@@ -1,14 +1,16 @@
-"""FastAPI web interface for ChatKit"""
+"""FastAPI web interface for ChatKit with AG-UI support"""
 
 from typing import Dict, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi import Request
 from pydantic import BaseModel
 import json
 
 from .core import ChatKitAgent
+from .memory import chatkit_memory
+from pydantic_ai.ag_ui import handle_ag_ui_request
 
 
 class ChatRequest(BaseModel):
@@ -58,7 +60,12 @@ class ChatKitServer:
                     "POST /api/session": "Create new chat session",
                     "GET /api/session/{session_id}": "Get session details",
                     "POST /api/chat": "Send chat message",
-                    "GET /ws/{session_id}": "WebSocket for real-time chat"
+                    "GET /ws/{session_id}": "WebSocket for real-time chat",
+                    "GET /api/memory": "Get memory summary",
+                    "DELETE /api/memory": "Clear all memory",
+                    "POST /api/memory/fact": "Add user fact",
+                    "POST /api/memory/note": "Add note",
+                    "POST /agui": "AG-UI protocol endpoint"
                 }
             }
 
@@ -303,6 +310,56 @@ class ChatKitServer:
             except WebSocketDisconnect:
                 if session_id in self.websocket_connections:
                     del self.websocket_connections[session_id]
+
+        # Memory management endpoints
+        @self.app.get("/api/memory")
+        async def get_memory_summary():
+            """Get memory summary"""
+            try:
+                memory_data = chatkit_memory._load_memory()
+                return {
+                    "user_preferences": len(memory_data.get("user_preferences", {})),
+                    "user_facts": len(memory_data.get("user_facts", {})),
+                    "notes": len(memory_data.get("notes", [])),
+                    "conversation_history": len(memory_data.get("conversation_history", [])),
+                    "created_at": memory_data.get("created_at"),
+                    "updated_at": memory_data.get("updated_at")
+                }
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error accessing memory: {str(e)}")
+
+        @self.app.delete("/api/memory")
+        async def clear_memory():
+            """Clear all memory"""
+            try:
+                result = chatkit_memory.clear_all_memory()
+                return {"message": result}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error clearing memory: {str(e)}")
+
+        @self.app.post("/api/memory/fact")
+        async def add_user_fact(fact_key: str, fact_value: str):
+            """Add a user fact to memory"""
+            try:
+                result = chatkit_memory.add_user_fact(fact_key, fact_value)
+                return {"message": result}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error adding fact: {str(e)}")
+
+        @self.app.post("/api/memory/note")
+        async def add_note(title: str, content: str):
+            """Add a note to memory"""
+            try:
+                result = chatkit_memory.add_note(title, content)
+                return {"message": result}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error adding note: {str(e)}")
+
+        # AG-UI protocol endpoint
+        @self.app.post("/agui")
+        async def agui_endpoint(request: Request):
+            """AG-UI protocol endpoint for streaming AI interactions"""
+            return await handle_ag_ui_request(self.agent.agent, request)
 
     def run(self, host: str = "0.0.0.0", port: int = 8000, debug: bool = False):
         """Run the FastAPI server"""

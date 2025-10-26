@@ -212,3 +212,5 @@ if __name__ == "__main__":
 
     # Exit with appropriate code
     sys.exit(0 if success else 1)
+    
+# uv run pytest test_chatkit.py -v --asyncio-mode=auto

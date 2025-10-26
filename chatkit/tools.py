@@ -2,12 +2,15 @@
 
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+from pydantic_ai import Agent, FunctionToolset
 from pydantic_ai.exceptions import ModelRetry, AgentRunError, ModelHTTPError, UnexpectedModelBehavior
 import datetime
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+
+# Memory Toolset imports
+from .memory import chatkit_memory
 
 # Load environment variables
 load_dotenv()
@@ -305,6 +308,99 @@ async def main():
     file_manager = FileManager()
     files = file_manager.list_uploaded_files()
     print(f"Uploaded files: {len(files)}")
+
+
+# Memory Toolset using pydantic-ai FunctionToolset
+
+# Create memory toolset
+memory_toolset = FunctionToolset()
+
+
+@memory_toolset.tool
+def store_personal_info(user_message: str) -> str:
+    """Automatically detect and store personal information from user messages"""
+    import re
+
+    # Look for name patterns like "I'm [name]" or "my name is [name]"
+    name_patterns = [
+        r"I'?m\s+([A-Za-z]+(?:\s+[A-Za-z]+)*)",
+        r"my name is\s+([A-Za-z]+(?:\s+[A-Za-z]+)*)",
+        r"call me\s+([A-Za-z]+(?:\s+[A-Za-z]+)*)",
+    ]
+
+    stored_info = []
+
+    for pattern in name_patterns:
+        match = re.search(pattern, user_message, re.IGNORECASE)
+        if match:
+            name = match.group(1).strip()
+            chatkit_memory.add_user_fact("user_name", name)
+            stored_info.append(f"Stored name: {name}")
+            break
+
+    if stored_info:
+        return f"Successfully stored: {', '.join(stored_info)}"
+    else:
+        return "No personal information detected to store"
+
+
+@memory_toolset.tool
+def view_memory(path: Optional[str] = None) -> str:
+    """View memory content and summary"""
+    if path:
+        from anthropic.types.beta import BetaMemoryTool20250818ViewCommand
+        command = BetaMemoryTool20250818ViewCommand(command="view", path=path)
+        return chatkit_memory.view(command)
+    else:
+        # Return detailed memory content, not just summary
+        memory = chatkit_memory._load_memory()
+
+        if not memory.get("user_facts"):
+            return "Memory is currently empty"
+
+        # Return specific user facts if available
+        user_facts = memory.get("user_facts", {})
+        if user_facts:
+            facts_list = []
+            for key, value in user_facts.items():
+                facts_list.append(f"{key}: {value}")
+
+            return "User facts:\n" + "\n".join(facts_list)
+        else:
+            return "No user facts stored in memory"
+
+
+@memory_toolset.tool
+def add_fact(fact_key: str, fact_value: str) -> str:
+    """Add a user fact to memory"""
+    return chatkit_memory.add_user_fact(fact_key, fact_value)
+
+
+@memory_toolset.tool
+def add_note(title: str, content: str) -> str:
+    """Add a note to memory"""
+    return chatkit_memory.add_note(title, content)
+
+
+@memory_toolset.tool
+def clear_memory() -> str:
+    """Clear all memory"""
+    return chatkit_memory.clear_all_memory()
+
+
+# Additional utility tools
+@memory_toolset.tool
+def get_current_date() -> str:
+    """Get the current date"""
+    from datetime import datetime
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+@memory_toolset.tool
+def get_current_time() -> str:
+    """Get the current time"""
+    from datetime import datetime
+    return datetime.now().strftime("%H:%M:%S")
 
 
 if __name__ == "__main__":

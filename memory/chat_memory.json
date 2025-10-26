@@ -1,0 +1,21 @@
+{
+  "user_preferences": {},
+  "conversation_history": [],
+  "user_facts": {
+    "test_fact": "This is a test fact",
+    "user_name": "Michelangelo",
+    "preferred beverage": "coffee",
+    "preferred_drink": "coffee",
+    "name": "Mike",
+    "nickname": "Mike"
+  },
+  "notes": [
+    {
+      "title": "Test Note",
+      "content": "This is a test note content",
+      "created_at": "2025-10-25T20:52:54.280479"
+    }
+  ],
+  "created_at": "2025-10-25T20:28:17.353358",
+  "updated_at": "2025-10-26T13:04:55.331800"
+}
