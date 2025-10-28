@@ -3,24 +3,39 @@
 from typing import Dict, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse
 from fastapi import Request
 from pydantic import BaseModel
 import json
+import logging
+import sys
 
 from .core import ChatKitAgent
 from .memory import chatkit_memory
 from pydantic_ai.ag_ui import handle_ag_ui_request
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("/tmp/chatkit.log"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+logger = logging.getLogger("chatkit")
+
 
 class ChatRequest(BaseModel):
     """Request model for chat messages"""
+
     message: str
     session_id: Optional[str] = None
 
 
 class ChatResponseModel(BaseModel):
     """Response model for chat messages"""
+
     message: str
     session_id: str
     tool_calls: list = []
@@ -57,6 +72,7 @@ class ChatKitServer:
                 "version": "0.1.0",
                 "endpoints": {
                     "GET /api": "API information",
+                    "GET /api/models": "Get available models",
                     "POST /api/session": "Create new chat session",
                     "GET /api/session/{session_id}": "Get session details",
                     "POST /api/chat": "Send chat message",
@@ -65,9 +81,98 @@ class ChatKitServer:
                     "DELETE /api/memory": "Clear all memory",
                     "POST /api/memory/fact": "Add user fact",
                     "POST /api/memory/note": "Add note",
-                    "POST /agui": "AG-UI protocol endpoint"
-                }
+                    "POST /agui": "AG-UI protocol endpoint",
+                },
             }
+
+        @self.app.get("/api/models")
+        async def get_available_models():
+            """Get available models with GPT-5 family support"""
+            logger.info("GET /api/models - Fetching available models")
+            return {
+                "models": [
+                    {
+                        "id": "openai:gpt-5",
+                        "name": "GPT-5",
+                        "provider": "openai",
+                        "family": "gpt-5",
+                        "supports_thinking": True,
+                        "description": "Latest GPT-5 model with advanced reasoning capabilities",
+                    },
+                    {
+                        "id": "openai:gpt-5-mini",
+                        "name": "GPT-5 Mini",
+                        "provider": "openai",
+                        "family": "gpt-5",
+                        "supports_thinking": True,
+                        "description": "Fast and efficient GPT-5 model",
+                    },
+                    {
+                        "id": "openai:gpt-4o",
+                        "name": "GPT-4o",
+                        "provider": "openai",
+                        "family": "gpt-4",
+                        "supports_thinking": False,
+                        "description": "Latest GPT-4 model with multimodal capabilities",
+                    },
+                    {
+                        "id": "openai:gpt-4o-mini",
+                        "name": "GPT-4o Mini",
+                        "provider": "openai",
+                        "family": "gpt-4",
+                        "supports_thinking": False,
+                        "description": "Fast and cost-effective GPT-4 model",
+                    },
+                    {
+                        "id": "openai:gpt-3.5-turbo",
+                        "name": "GPT-3.5 Turbo",
+                        "provider": "openai",
+                        "family": "gpt-3.5",
+                        "supports_thinking": False,
+                        "description": "Fast and efficient GPT-3.5 model",
+                    },
+                    {
+                        "id": "anthropic:claude-3-5-sonnet-20241022",
+                        "name": "Claude 3.5 Sonnet",
+                        "provider": "anthropic",
+                        "family": "claude-3.5",
+                        "supports_thinking": True,
+                        "description": "Latest Claude model with advanced reasoning",
+                    },
+                    {
+                        "id": "anthropic:claude-3-haiku-20240307",
+                        "name": "Claude 3 Haiku",
+                        "provider": "anthropic",
+                        "family": "claude-3",
+                        "supports_thinking": True,
+                        "description": "Fast and efficient Claude model",
+                    },
+                ]
+            }
+
+        @self.app.post("/api/model/switch")
+        async def switch_model(request: Request):
+            """Switch to a different model"""
+            try:
+                body = await request.json()
+                model_id = body.get("model_id")
+
+                logger.info(f"POST /api/model/switch - Switching to model: {model_id}")
+
+                if not model_id:
+                    logger.warning("POST /api/model/switch - Missing model_id")
+                    raise HTTPException(status_code=400, detail="model_id is required")
+
+                result = self.agent.switch_model(model_id)
+                logger.info(
+                    f"POST /api/model/switch - Successfully switched to: {model_id}"
+                )
+                return {"message": result["message"], "current_model": model_id}
+            except Exception as e:
+                logger.error(f"POST /api/model/switch - Error: {str(e)}")
+                raise HTTPException(
+                    status_code=400, detail=f"Error switching model: {str(e)}"
+                )
 
         @self.app.get("/", response_class=HTMLResponse)
         async def read_root(request: Request):
@@ -236,7 +341,7 @@ class ChatKitServer:
             session = self.agent.create_session()
             return {
                 "session_id": session.session_id,
-                "message": "Session created successfully"
+                "message": "Session created successfully",
             }
 
         @self.app.get("/api/session/{session_id}")
@@ -248,7 +353,7 @@ class ChatKitServer:
             return {
                 "session_id": session.session_id,
                 "messages": [msg.model_dump() for msg in session.messages],
-                "metadata": session.metadata
+                "metadata": session.metadata,
             }
 
         @self.app.post("/api/chat", response_model=ChatResponseModel)
@@ -261,20 +366,26 @@ class ChatKitServer:
                     chat_request.session_id = session.session_id
 
                 # Get response from agent
-                response = self.agent.send_message(chat_request.session_id, chat_request.message)
+                response = self.agent.send_message(
+                    chat_request.session_id, chat_request.message
+                )
                 async for chunk in response:
                     if chunk.metadata.get("complete"):
                         return ChatResponseModel(
                             message=chunk.message,
                             session_id=chunk.session_id,
                             tool_calls=chunk.tool_calls,
-                            metadata=chunk.metadata
+                            metadata=chunk.metadata,
                         )
 
                 # If we get here, no complete chunk was found
-                raise HTTPException(status_code=500, detail="No complete response received")
+                raise HTTPException(
+                    status_code=500, detail="No complete response received"
+                )
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
+                raise HTTPException(
+                    status_code=500, detail=f"Error processing message: {str(e)}"
+                )
 
         @self.app.websocket("/ws/{session_id}")
         async def websocket_endpoint(websocket: WebSocket, session_id: str):
@@ -291,21 +402,31 @@ class ChatKitServer:
                         message = message_data.get("message")
 
                         # Send user message back for display
-                        await websocket.send_text(json.dumps({
-                            "type": "user_message",
-                            "message": message,
-                            "session_id": session_id
-                        }))
+                        await websocket.send_text(
+                            json.dumps(
+                                {
+                                    "type": "user_message",
+                                    "message": message,
+                                    "session_id": session_id,
+                                }
+                            )
+                        )
 
                         # Get and stream agent response
-                        response = await self.agent.send_message(session_id, message, stream=True)
+                        response = await self.agent.send_message(
+                            session_id, message, stream=True
+                        )
                         async for chunk in response:
-                            await websocket.send_text(json.dumps({
-                                "type": "assistant_message",
-                                "message": chunk.message,
-                                "session_id": chunk.session_id,
-                                "metadata": chunk.metadata
-                            }))
+                            await websocket.send_text(
+                                json.dumps(
+                                    {
+                                        "type": "assistant_message",
+                                        "message": chunk.message,
+                                        "session_id": chunk.session_id,
+                                        "metadata": chunk.metadata,
+                                    }
+                                )
+                            )
 
             except WebSocketDisconnect:
                 if session_id in self.websocket_connections:
@@ -321,12 +442,16 @@ class ChatKitServer:
                     "user_preferences": len(memory_data.get("user_preferences", {})),
                     "user_facts": len(memory_data.get("user_facts", {})),
                     "notes": len(memory_data.get("notes", [])),
-                    "conversation_history": len(memory_data.get("conversation_history", [])),
+                    "conversation_history": len(
+                        memory_data.get("conversation_history", [])
+                    ),
                     "created_at": memory_data.get("created_at"),
-                    "updated_at": memory_data.get("updated_at")
+                    "updated_at": memory_data.get("updated_at"),
                 }
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Error accessing memory: {str(e)}")
+                raise HTTPException(
+                    status_code=500, detail=f"Error accessing memory: {str(e)}"
+                )
 
         @self.app.delete("/api/memory")
         async def clear_memory():
@@ -335,7 +460,9 @@ class ChatKitServer:
                 result = chatkit_memory.clear_all_memory()
                 return {"message": result}
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Error clearing memory: {str(e)}")
+                raise HTTPException(
+                    status_code=500, detail=f"Error clearing memory: {str(e)}"
+                )
 
         @self.app.post("/api/memory/fact")
         async def add_user_fact(fact_key: str, fact_value: str):
@@ -344,7 +471,9 @@ class ChatKitServer:
                 result = chatkit_memory.add_user_fact(fact_key, fact_value)
                 return {"message": result}
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Error adding fact: {str(e)}")
+                raise HTTPException(
+                    status_code=500, detail=f"Error adding fact: {str(e)}"
+                )
 
         @self.app.post("/api/memory/note")
         async def add_note(title: str, content: str):
@@ -353,7 +482,9 @@ class ChatKitServer:
                 result = chatkit_memory.add_note(title, content)
                 return {"message": result}
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Error adding note: {str(e)}")
+                raise HTTPException(
+                    status_code=500, detail=f"Error adding note: {str(e)}"
+                )
 
         # AG-UI protocol endpoint
         @self.app.post("/agui")
@@ -364,6 +495,7 @@ class ChatKitServer:
     def run(self, host: str = "0.0.0.0", port: int = 8000, debug: bool = False):
         """Run the FastAPI server"""
         import uvicorn
+
         uvicorn.run(self.app, host=host, port=port, debug=debug)
 
 

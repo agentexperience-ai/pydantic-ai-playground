@@ -50,6 +50,11 @@ import { WebPreview, WebPreviewNavigation, WebPreviewNavigationButton, WebPrevie
 import { InlineCitation, InlineCitationText, InlineCitationCard, InlineCitationCardTrigger, InlineCitationCardBody, InlineCitationCarousel, InlineCitationCarouselHeader, InlineCitationCarouselPrev, InlineCitationCarouselNext, InlineCitationCarouselIndex, InlineCitationCarouselContent, InlineCitationCarouselItem, InlineCitationSource } from "@/components/ai-elements/inline-citation"
 import { PromptInput, PromptInputBody, PromptInputTextarea, PromptInputFooter, PromptInputTools, PromptInputSubmit, PromptInputActionMenu, PromptInputActionMenuTrigger, PromptInputActionMenuContent, PromptInputActionAddAttachments, PromptInputSpeechButton, PromptInputButton, PromptInputModelSelect, PromptInputModelSelectTrigger, PromptInputModelSelectValue, PromptInputModelSelectContent, PromptInputModelSelectItem, PromptInputAttachments, PromptInputAttachment } from "@/components/ai-elements/prompt-input"
 
+// AG-UI Hooks
+import { useAgUiChat } from '@/hooks/use-ag-ui-chat'
+import { useAgUiMemory } from '@/hooks/use-ag-ui-memory'
+import { agUiClient } from '@/lib/ag-ui-client'
+
 import {
   ThumbsUpIcon,
   ThumbsDownIcon,
@@ -68,68 +73,239 @@ import {
   SearchIcon,
 } from 'lucide-react'
 import { nanoid } from 'nanoid'
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+
+// Types for AG-UI structured data
+type ChainOfThoughtStep = {
+  label: string;
+  description: string;
+  status: 'active' | 'complete' | 'pending';
+  content: string;
+  type?: 'text' | 'reasoning' | 'function_call';
+};
+
+type SourceData = {
+  href: string;
+  title: string;
+};
+
+type TaskData = {
+  key: string;
+  value: string;
+};
+
+type ReasoningData = {
+  content: string;
+  parts?: Array<{ type: string; content: string; id?: string }>;
+};
+
+type AgUiComponentData = {
+  type: 'message' | 'chain_of_thought' | 'plan' | 'artifact' | 'sources' | 'tasks' | 'reasoning' | 'response' | 'branch' | 'context' | 'image' | 'open_in' | 'queue' | 'tool' | 'web_preview' | 'inline_citation';
+  data:
+    | ChainOfThoughtStep[]
+    | SourceData[]
+    | TaskData[]
+    | ReasoningData
+    | { content: string; timestamp?: number }
+    | { title: string; description: string; code: string; language: string }
+    | Record<string, unknown>;
+};
 
 export default function Page() {
-  const [messages, setMessages] = useState<{
-    key: string;
-    from: 'user' | 'assistant';
-    content: string;
-    avatar: string;
-    name: string;
-    type?: 'message' | 'artifact' | 'tool' | 'reasoning';
-  }[]>([
-    {
-      key: nanoid(),
-      from: 'user',
-      content: 'Hello! Can you help me implement Dijkstra\'s algorithm in Python?',
-      avatar: 'https://github.com/haydenbleasel.png',
-      name: 'User',
-      type: 'message'
+  // AG-UI Chat Hook
+  const {
+    messages: agUiMessages,
+    isLoading,
+    isStreaming,
+    sendMessage,
+  } = useAgUiChat({
+    onSessionChange: (newSessionId) => {
+      console.log('Session changed:', newSessionId);
     },
-    {
-      key: nanoid(),
-      from: 'assistant',
-      content: 'Sure! I can help you implement Dijkstra\'s algorithm in Python.',
-      avatar: 'https://github.com/openai.png',
-      name: 'AI Assistant',
-      type: 'message'
-    }
-  ])
+    onError: (error) => {
+      console.error('AG-UI Error:', error);
+    },
+  });
+
+  // AG-UI Memory Hook
+  const { loadMemorySummary } = useAgUiMemory();
+
+  // Models state
+  const [availableModels, setAvailableModels] = useState<Array<{
+    id: string;
+    name: string;
+    provider: string;
+    family: string;
+    supports_thinking: boolean;
+    description: string;
+  }>>([]);
+
+  // Load memory summary and models on component mount
+  useEffect(() => {
+    loadMemorySummary();
+
+    // Load available models
+    const loadModels = async () => {
+      try {
+        const modelsData = await agUiClient.getAvailableModels();
+        setAvailableModels(modelsData.models);
+      } catch (error) {
+        console.error('Failed to load models:', error);
+      }
+    };
+
+    loadModels();
+  }, [loadMemorySummary]);
+
+  // Parse AG-UI messages and extract structured data for components
+  const structuredData = useMemo(() => {
+    const parsedData: AgUiComponentData[] = [];
+
+    // Process each AG-UI message to extract structured information
+    agUiMessages.forEach((msg, index) => {
+      if (msg.role === 'assistant') {
+        // Handle thinking parts from AG-UI protocol - PRIMARY SOURCE OF REASONING DATA
+        if (msg.thinking_parts && msg.thinking_parts.length > 0) {
+          // Create Chain of Thought from structured thinking parts
+          const reasoningSteps = msg.thinking_parts.map((thinkingPart, partIndex) => ({
+            label: `Step ${partIndex + 1}`,
+            description: thinkingPart.content.substring(0, 100) + '...',
+            status: (partIndex === msg.thinking_parts!.length - 1 ? 'active' : 'complete') as 'active' | 'complete' | 'pending',
+            content: thinkingPart.content,
+            type: thinkingPart.type
+          }));
+
+          parsedData.push({
+            type: 'chain_of_thought',
+            data: reasoningSteps
+          });
+
+          // Also create Reasoning component for thinking parts
+          parsedData.push({
+            type: 'reasoning',
+            data: {
+              content: msg.thinking_parts.map(part => part.content).join('\n\n'),
+              parts: msg.thinking_parts
+            }
+          });
+        }
+
+        // Parse the content to extract structured information
+        const content = msg.content || '';
+
+        // Extract code blocks for Artifact component
+        const codeBlocks = content.match(/```(?:\w+)?\n([\s\S]*?)```/g);
+        if (codeBlocks) {
+          codeBlocks.forEach((block, blockIndex) => {
+            const codeMatch = block.match(/```(?:\w+)?\n([\s\S]*?)```/);
+            if (codeMatch) {
+              parsedData.push({
+                type: 'artifact',
+                data: {
+                  title: `Code Block ${blockIndex + 1}`,
+                  description: 'Generated code implementation',
+                  code: codeMatch[1],
+                  language: 'python',
+                }
+              });
+            }
+          });
+        }
+
+        // Extract URLs for Sources component
+        const urlRegex = /https?:\/\/[^\s)]+/g;
+        const urls = content.match(urlRegex);
+        if (urls && urls.length > 0) {
+          parsedData.push({
+            type: 'sources',
+            data: urls.map(url => ({
+              href: url,
+              title: url.split('/')[2] // Extract domain name
+            }))
+          });
+        }
+
+        // Extract step-by-step reasoning for Chain of Thought (if no thinking parts)
+        if (!msg.thinking_parts || msg.thinking_parts.length === 0) {
+          const steps = content.split(/\d+\.\s+/).filter(step => step.trim().length > 0);
+          if (steps.length > 1) {
+            parsedData.push({
+              type: 'chain_of_thought',
+              data: steps.map((step, stepIndex) => ({
+                label: `Step ${stepIndex + 1}`,
+                description: step.substring(0, 100) + '...',
+                status: (stepIndex === steps.length - 1 ? 'active' : 'complete') as 'active' | 'complete' | 'pending',
+                content: step
+              }))
+            });
+          }
+        }
+
+        // Extract tasks/todo items
+        const taskRegex = /[-•*]\s+(.+?)(?=\n[-•*]|\n\n|$)/g;
+        const tasks = [];
+        let match;
+        while ((match = taskRegex.exec(content)) !== null) {
+          tasks.push(match[1]);
+        }
+        if (tasks.length > 0) {
+          parsedData.push({
+            type: 'tasks',
+            data: tasks.map((task, taskIndex) => ({
+              key: `task-${index}-${taskIndex}`,
+              value: task
+            }))
+          });
+        }
+
+        // Add main message as Response component
+        parsedData.push({
+          type: 'response',
+          data: {
+            content: content,
+            timestamp: msg.timestamp
+          }
+        });
+      }
+    });
+
+    return parsedData;
+  }, [agUiMessages]);
+
+  // Convert AG-UI messages to dashboard format
+  const messages = agUiMessages.map((msg, index) => ({
+    key: `msg-${index}-${msg.timestamp || index}`,
+    from: msg.role === 'user' ? 'user' : 'assistant' as 'user' | 'assistant',
+    content: msg.content,
+    avatar: msg.role === 'user'
+      ? 'https://github.com/haydenbleasel.png'
+      : 'https://github.com/openai.png',
+    name: msg.role === 'user' ? 'User' : 'AI Assistant',
+    type: 'message' as const,
+  }));
 
   const [inputText, setInputText] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-  const [model, setModel] = useState('gpt-4')
+  const [model, setModel] = useState('openai:gpt-5')
 
-  const handleSubmit = (message: { text?: string }) => {
+  const handleSubmit = async (message: { text?: string }) => {
     if (!message.text?.trim()) return
 
-    const newUserMessage = {
-      key: nanoid(),
-      from: 'user' as const,
-      content: message.text,
-      avatar: 'https://github.com/haydenbleasel.png',
-      name: 'User',
-      type: 'message' as const
+    try {
+      await sendMessage(message.text);
+      setInputText('');
+    } catch (error) {
+      console.error('Failed to send message:', error);
     }
+  }
 
-    setMessages(prev => [...prev, newUserMessage])
-    setInputText('')
-    setIsLoading(true)
-
-    // Simulate AI response
-    setTimeout(() => {
-      const aiResponse = {
-        key: nanoid(),
-        from: 'assistant' as const,
-        content: 'I\'ve processed your request. Here\'s the implementation you asked for:',
-        avatar: 'https://github.com/openai.png',
-        name: 'AI Assistant',
-        type: 'message' as const
-      }
-      setMessages(prev => [...prev, aiResponse])
-      setIsLoading(false)
-    }, 1000)
+  const handleModelChange = async (newModelId: string) => {
+    try {
+      await agUiClient.switchModel(newModelId);
+      setModel(newModelId);
+      console.log(`Switched to model: ${newModelId}`);
+    } catch (error) {
+      console.error('Failed to switch model:', error);
+    }
   }
 
   const handleSuggestionClick = (suggestion: string) => {
@@ -257,12 +433,14 @@ print(dijkstra(graph, 'A'))  # Output: {'A': 0, 'B': 1, 'C': 3, 'D': 4}`
                               )}
                             </Message>
                           ))}
-                          {isLoading && (
+                          {(isLoading || isStreaming) && (
                             <Message from="assistant">
                               <MessageContent>
                                 <div className="flex items-center gap-2">
                                   <Loader />
-                                  <Shimmer>Generating response...</Shimmer>
+                                  <Shimmer>
+                                    {isStreaming ? 'Streaming response...' : 'Generating response...'}
+                                  </Shimmer>
                                 </div>
                               </MessageContent>
                               <MessageAvatar name="AI Assistant" src="https://github.com/openai.png" />
@@ -275,136 +453,276 @@ print(dijkstra(graph, 'A'))  # Output: {'A': 0, 'B': 1, 'C': 3, 'D': 4}`
                   </Conversation>
                 </div>
 
-                {/* Chain of Thought Component */}
-                <ChainOfThought defaultOpen>
-                  <ChainOfThoughtHeader>
-                    Algorithm Analysis Process
-                  </ChainOfThoughtHeader>
-                  <ChainOfThoughtContent>
-                    <ChainOfThoughtStep
-                      label="Understanding the problem"
-                      description="Analyzing shortest path requirements"
-                      status="complete"
-                    >
-                      <Response>
-                        The user needs to find the shortest path between nodes in a weighted graph.
-                      </Response>
-                    </ChainOfThoughtStep>
-                    <ChainOfThoughtStep
-                      label="Selecting the algorithm"
-                      description="Choosing Dijkstra's algorithm for non-negative weights"
-                      status="complete"
-                    >
-                      <Response>
-                        Dijkstra algorithm is optimal for graphs with non-negative edge weights.
-                      </Response>
-                    </ChainOfThoughtStep>
-                    <ChainOfThoughtStep
-                      label="Implementation planning"
-                      description="Designing the priority queue structure"
-                      status="active"
-                    >
-                      <Response>
-                        Using Python heapq module for efficient priority queue operations.
-                      </Response>
-                    </ChainOfThoughtStep>
-                    <ChainOfThoughtStep
-                      label="Testing and validation"
-                      description="Verifying correctness with sample data"
-                      status="pending"
-                    />
-                  </ChainOfThoughtContent>
-                </ChainOfThought>
+                {/* Dynamically rendered AI Elements components from AG-UI data */}
+                {structuredData.map((component, index) => {
+                  switch (component.type) {
+                    case 'chain_of_thought':
+                      const chainData = component.data as ChainOfThoughtStep[];
+                      return (
+                        <ChainOfThought key={`cot-${index}`} defaultOpen>
+                          <ChainOfThoughtHeader>
+                            Reasoning Process
+                          </ChainOfThoughtHeader>
+                          <ChainOfThoughtContent>
+                            {chainData.map((step, stepIndex) => (
+                              <ChainOfThoughtStep
+                                key={`step-${stepIndex}`}
+                                label={step.label}
+                                description={step.description}
+                                status={step.status}
+                              >
+                                <Response>
+                                  {step.content}
+                                </Response>
+                              </ChainOfThoughtStep>
+                            ))}
+                          </ChainOfThoughtContent>
+                        </ChainOfThought>
+                      );
 
-                {/* Plan Component */}
-                <Plan defaultOpen>
-                  <PlanHeader>
-                    <div>
-                      <PlanTitle>Implementation Roadmap</PlanTitle>
-                      <PlanDescription>Step-by-step plan for Dijkstra algorithm</PlanDescription>
-                    </div>
-                    <PlanTrigger />
-                  </PlanHeader>
-                  <PlanContent>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <div className="size-2 bg-green-500 rounded-full"></div>
-                        <span className="text-sm">Initialize distance dictionary</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="size-2 bg-green-500 rounded-full"></div>
-                        <span className="text-sm">Set up priority queue with heapq</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="size-2 bg-blue-500 rounded-full"></div>
-                        <span className="text-sm">Implement main algorithm loop</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="size-2 bg-gray-300 rounded-full"></div>
-                        <span className="text-sm">Test with sample graph data</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="size-2 bg-gray-300 rounded-full"></div>
-                        <span className="text-sm">Optimize for edge cases</span>
-                      </div>
-                    </div>
-                  </PlanContent>
-                </Plan>
+                    case 'artifact':
+                      const artifactData = component.data as { title: string; description: string; code: string; language: string };
+                      return (
+                        <Artifact key={`artifact-${index}`}>
+                          <ArtifactHeader>
+                            <div>
+                              <ArtifactTitle>{artifactData.title}</ArtifactTitle>
+                              <ArtifactDescription>{artifactData.description}</ArtifactDescription>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <ArtifactActions>
+                                <ArtifactAction
+                                  icon={PlayIcon}
+                                  label="Run"
+                                  onClick={() => console.log('Run code')}
+                                  tooltip="Run code"
+                                />
+                                <ArtifactAction
+                                  icon={CopyIcon}
+                                  label="Copy"
+                                  onClick={() => console.log('Copy code')}
+                                  tooltip="Copy to clipboard"
+                                />
+                                <ArtifactAction
+                                  icon={DownloadIcon}
+                                  label="Download"
+                                  onClick={() => console.log('Download')}
+                                  tooltip="Download file"
+                                />
+                              </ArtifactActions>
+                            </div>
+                          </ArtifactHeader>
+                          <ArtifactContent className="p-0">
+                            <CodeBlock
+                              className="border-none"
+                              code={artifactData.code}
+                              language={artifactData.language}
+                              showLineNumbers
+                            >
+                              <CodeBlockCopyButton
+                                onCopy={() => console.log('Code copied to clipboard')}
+                                onError={() => console.error('Failed to copy code')}
+                              />
+                            </CodeBlock>
+                          </ArtifactContent>
+                        </Artifact>
+                      );
 
-                {/* Artifact Component */}
-                <Artifact>
-                  <ArtifactHeader>
-                    <div>
-                      <ArtifactTitle>Dijkstra&apos;s Algorithm Implementation</ArtifactTitle>
-                      <ArtifactDescription>Python implementation with heapq</ArtifactDescription>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <ArtifactActions>
-                        <ArtifactAction
-                          icon={PlayIcon}
-                          label="Run"
-                          onClick={() => console.log('Run code')}
-                          tooltip="Run code"
-                        />
-                        <ArtifactAction
-                          icon={CopyIcon}
-                          label="Copy"
-                          onClick={() => console.log('Copy code')}
-                          tooltip="Copy to clipboard"
-                        />
-                        <ArtifactAction
-                          icon={DownloadIcon}
-                          label="Download"
-                          onClick={() => console.log('Download')}
-                          tooltip="Download file"
-                        />
-                      </ArtifactActions>
-                    </div>
-                  </ArtifactHeader>
-                  <ArtifactContent className="p-0">
-                    <CodeBlock
-                      className="border-none"
-                      code={dijkstraCode}
-                      language="python"
-                      showLineNumbers
-                    >
-                      <CodeBlockCopyButton
-                        onCopy={() => console.log('Code copied to clipboard')}
-                        onError={() => console.error('Failed to copy code')}
-                      />
-                    </CodeBlock>
-                  </ArtifactContent>
-                </Artifact>
+                    case 'sources':
+                      const sourcesData = component.data as SourceData[];
+                      return (
+                        <Sources key={`sources-${index}`}>
+                          <SourcesTrigger count={sourcesData.length} />
+                          <SourcesContent>
+                            {sourcesData.map((source, sourceIndex) => (
+                              <Source href={source.href} key={`source-${sourceIndex}`} title={source.title} />
+                            ))}
+                          </SourcesContent>
+                        </Sources>
+                      );
 
-                {/* Sources Component */}
-                <Sources>
-                  <SourcesTrigger count={sampleSources.length} />
-                  <SourcesContent>
-                    {sampleSources.map((source) => (
-                      <Source href={source.href} key={source.href} title={source.title} />
-                    ))}
-                  </SourcesContent>
-                </Sources>
+                    case 'reasoning':
+                      const reasoningData = component.data as ReasoningData;
+                      return (
+                        <div key={`reasoning-${index}`} className="bg-card rounded-lg border shadow-sm">
+                          <Reasoning>
+                            <ReasoningTrigger />
+                            <ReasoningContent>
+                              {reasoningData.content}
+                            </ReasoningContent>
+                          </Reasoning>
+                        </div>
+                      );
+
+                    case 'response':
+                      const responseData = component.data as { content: string; timestamp?: number };
+                      return (
+                        <div key={`response-${index}`} className="bg-card rounded-lg border shadow-sm p-4">
+                          <h3 className="font-semibold mb-2">Response</h3>
+                          <Response>
+                            {responseData.content}
+                          </Response>
+                        </div>
+                      );
+
+                    default:
+                      return null;
+                  }
+                })}
+
+                {/* Show static components only when no AG-UI data is available */}
+                {structuredData.length === 0 && agUiMessages.length === 0 && (
+                  <>
+                    {/* Chain of Thought Component */}
+                    <ChainOfThought defaultOpen>
+                      <ChainOfThoughtHeader>
+                        Algorithm Analysis Process
+                      </ChainOfThoughtHeader>
+                      <ChainOfThoughtContent>
+                        <ChainOfThoughtStep
+                          icon={SearchIcon}
+                          label="Understanding the problem"
+                          description="Analyzing shortest path requirements"
+                          status="complete"
+                        >
+                          <Response>
+                            The user needs to find the shortest path between nodes in a weighted graph.
+                          </Response>
+                          <ChainOfThoughtSearchResults>
+                            <ChainOfThoughtSearchResult>
+                              <div className="size-4 bg-blue-500 rounded flex items-center justify-center text-white text-xs">G</div>
+                              Graph Theory
+                            </ChainOfThoughtSearchResult>
+                            <ChainOfThoughtSearchResult>
+                              <div className="size-4 bg-green-500 rounded flex items-center justify-center text-white text-xs">W</div>
+                              Weighted Graphs
+                            </ChainOfThoughtSearchResult>
+                          </ChainOfThoughtSearchResults>
+                        </ChainOfThoughtStep>
+                        <ChainOfThoughtStep
+                          icon={SearchIcon}
+                          label="Selecting the algorithm"
+                          description="Choosing Dijkstra's algorithm for non-negative weights"
+                          status="complete"
+                        >
+                          <Response>
+                            Dijkstra algorithm is optimal for graphs with non-negative edge weights.
+                          </Response>
+                        </ChainOfThoughtStep>
+                        <ChainOfThoughtStep
+                          icon={ImageIcon}
+                          label="Implementation planning"
+                          description="Designing the priority queue structure"
+                          status="active"
+                        >
+                          <Response>
+                            Using Python heapq module for efficient priority queue operations.
+                          </Response>
+                          <ChainOfThoughtImage caption="Priority queue visualization for Dijkstra's algorithm">
+                            <div className="h-32 w-full bg-linear-to-r from-blue-500 to-purple-600 rounded-md flex items-center justify-center text-white font-semibold">
+                              Priority Queue Diagram
+                            </div>
+                          </ChainOfThoughtImage>
+                        </ChainOfThoughtStep>
+                        <ChainOfThoughtStep
+                          label="Testing and validation"
+                          description="Verifying correctness with sample data"
+                          status="pending"
+                        />
+                      </ChainOfThoughtContent>
+                    </ChainOfThought>
+
+                    {/* Plan Component */}
+                    <Plan defaultOpen>
+                      <PlanHeader>
+                        <div>
+                          <PlanTitle>Implementation Roadmap</PlanTitle>
+                          <PlanDescription>Step-by-step plan for Dijkstra algorithm</PlanDescription>
+                        </div>
+                        <PlanTrigger />
+                      </PlanHeader>
+                      <PlanContent>
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <div className="size-2 bg-green-500 rounded-full"></div>
+                            <span className="text-sm">Initialize distance dictionary</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="size-2 bg-green-500 rounded-full"></div>
+                            <span className="text-sm">Set up priority queue with heapq</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="size-2 bg-blue-500 rounded-full"></div>
+                            <span className="text-sm">Implement main algorithm loop</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="size-2 bg-gray-300 rounded-full"></div>
+                            <span className="text-sm">Test with sample graph data</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="size-2 bg-gray-300 rounded-full"></div>
+                            <span className="text-sm">Optimize for edge cases</span>
+                          </div>
+                        </div>
+                      </PlanContent>
+                    </Plan>
+
+                    {/* Artifact Component */}
+                    <Artifact>
+                      <ArtifactHeader>
+                        <div>
+                          <ArtifactTitle>Dijkstra&apos;s Algorithm Implementation</ArtifactTitle>
+                          <ArtifactDescription>Python implementation with heapq</ArtifactDescription>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <ArtifactActions>
+                            <ArtifactAction
+                              icon={PlayIcon}
+                              label="Run"
+                              onClick={() => console.log('Run code')}
+                              tooltip="Run code"
+                            />
+                            <ArtifactAction
+                              icon={CopyIcon}
+                              label="Copy"
+                              onClick={() => console.log('Copy code')}
+                              tooltip="Copy to clipboard"
+                            />
+                            <ArtifactAction
+                              icon={DownloadIcon}
+                              label="Download"
+                              onClick={() => console.log('Download')}
+                              tooltip="Download file"
+                            />
+                          </ArtifactActions>
+                        </div>
+                      </ArtifactHeader>
+                      <ArtifactContent className="p-0">
+                        <CodeBlock
+                          className="border-none"
+                          code={dijkstraCode}
+                          language="python"
+                          showLineNumbers
+                        >
+                          <CodeBlockCopyButton
+                            onCopy={() => console.log('Code copied to clipboard')}
+                            onError={() => console.error('Failed to copy code')}
+                          />
+                        </CodeBlock>
+                      </ArtifactContent>
+                    </Artifact>
+
+                    {/* Sources Component */}
+                    <Sources>
+                      <SourcesTrigger count={sampleSources.length} />
+                      <SourcesContent>
+                        {sampleSources.map((source) => (
+                          <Source href={source.href} key={source.href} title={source.title} />
+                        ))}
+                      </SourcesContent>
+                    </Sources>
+                  </>
+                )}
               </div>
 
               {/* Right Column - Additional Components */}
@@ -423,42 +741,83 @@ print(dijkstra(graph, 'A'))  # Output: {'A': 0, 'B': 1, 'C': 3, 'D': 4}`
                   </Suggestions>
                 </div>
 
-                {/* Task Component */}
+                {/* Task Component - Show dynamic tasks from AG-UI data */}
                 <div className="bg-card rounded-lg border shadow-sm">
                   <Task>
                     <TaskTrigger title="Current Tasks" />
                     <TaskContent>
-                      {sampleTasks.map((task) => (
-                        <TaskItem key={task.key}>{task.value}</TaskItem>
-                      ))}
-                      <TaskItem>
-                        <span className="inline-flex items-center gap-1">
-                          Read
-                          <TaskItemFile>
-                            <div className="size-4 bg-blue-500 rounded flex items-center justify-center text-white text-xs">PY</div>
-                            <span>dijkstra.py</span>
-                          </TaskItemFile>
-                        </span>
-                      </TaskItem>
+                      {/* Show dynamic tasks from AG-UI data */}
+                      {structuredData
+                        .filter(comp => comp.type === 'tasks')
+                        .flatMap(comp => (comp.data as TaskData[]))
+                        .map((task) => (
+                          <TaskItem key={task.key}>{task.value}</TaskItem>
+                        ))}
+                      {/* Show static tasks only when no dynamic tasks available */}
+                      {structuredData.filter(comp => comp.type === 'tasks').length === 0 && (
+                        <>
+                          {sampleTasks.map((task) => (
+                            <TaskItem key={task.key}>{task.value}</TaskItem>
+                          ))}
+                          <TaskItem>
+                            <span className="inline-flex items-center gap-1">
+                              Read
+                              <TaskItemFile>
+                                <div className="size-4 bg-blue-500 rounded flex items-center justify-center text-white text-xs">PY</div>
+                                <span>dijkstra.py</span>
+                              </TaskItemFile>
+                            </span>
+                          </TaskItem>
+                        </>
+                      )}
                     </TaskContent>
                   </Task>
                 </div>
 
-                {/* Reasoning Component */}
+                {/* Reasoning Component - Show dynamic reasoning from AG-UI data */}
                 <div className="bg-card rounded-lg border shadow-sm">
                   <Reasoning>
                     <ReasoningTrigger />
                     <ReasoningContent>
-                      I&apos;m analyzing the graph structure and determining the optimal path using Dijkstra&apos;s algorithm. The implementation uses a priority queue for efficient node selection.
+                      {(() => {
+                        // Convert the reasoning data to a string for ReasoningContent
+                        const reasoningComponents = structuredData.filter(comp => comp.type === 'reasoning');
+                        const chainOfThoughtComponents = structuredData.filter(comp => comp.type === 'chain_of_thought');
+
+                        if (reasoningComponents.length > 0) {
+                          return reasoningComponents.map((comp) => {
+                            const reasoningData = comp.data as ReasoningData;
+                            if (reasoningData.parts && reasoningData.parts.length > 0) {
+                              return reasoningData.parts.map(part =>
+                                `${part.type === 'reasoning' ? '🧠 Reasoning' : part.type === 'function_call' ? '⚙️ Function Call' : '📝 Text'}: ${part.content}`
+                              ).join('\n\n');
+                            }
+                            return reasoningData.content;
+                          }).join('\n\n');
+                        } else if (chainOfThoughtComponents.length > 0) {
+                          return chainOfThoughtComponents.map((comp) => {
+                            const steps = comp.data as ChainOfThoughtStep[];
+                            return steps.map(step => `${step.label}: ${step.description}`).join('\n');
+                          }).join('\n\n');
+                        } else {
+                          return "I'm analyzing the graph structure and determining the optimal path using Dijkstra's algorithm. The implementation uses a priority queue for efficient node selection.";
+                        }
+                      })()}
                     </ReasoningContent>
                   </Reasoning>
                 </div>
 
-                {/* Response Component */}
+                {/* Response Component - Show dynamic responses from AG-UI data */}
                 <div className="bg-card rounded-lg border shadow-sm p-4">
                   <h3 className="font-semibold mb-2">Quick Response</h3>
                   <Response>
-                    Dijkstra&apos;s algorithm finds the shortest path between nodes in a graph with non-negative edge weights. Time complexity is O((V+E) log V) using a priority queue.
+                    {structuredData.filter(comp => comp.type === 'response').length > 0 ? (
+                      (structuredData
+                        .filter(comp => comp.type === 'response')
+                        .slice(-1)[0]?.data as { content: string; timestamp?: number }).content.substring(0, 200) + '...'
+                    ) : (
+                      "Dijkstra's algorithm finds the shortest path between nodes in a graph with non-negative edge weights. Time complexity is O((V+E) log V) using a priority queue."
+                    )}
                   </Response>
                 </div>
 
@@ -521,8 +880,8 @@ print(dijkstra(graph, 'A'))  # Output: {'A': 0, 'B': 1, 'C': 3, 'D': 4}`
                   <Image
                     alt="Generated algorithm diagram"
                     className="h-32 w-full object-cover rounded-md"
-                    base64="/9j/4AAQSkZJRgABAgEASABIAAD/2wCEAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAf/CABEIASwBLAMBEQACEQEDEQH/xAA5AAABAwUBAQEAAAAAAAAAAAACAQMEAAcICQoFBgsBAAICAwEBAAAAAAAAAAAAAAABAgQDBQYHCP/+2P5oZ4H9P5oH+/COk/wA1IdH8j4Gi+fiQhdNWOoB8APeZ0Jk4H91v29+H5oj+95Pvm50d+Afg+/Wj9/1/OulPU/ZAoVOYk6sP/npdedMkkc8e+qtGD7kv80ffA1k9+kgGqyb0FGZHr40ZPic0P7+mZ1RC693h0+dGhJofzRMnodEyeoHjR/Lzj3/dCQ+B8/BOFo0eIHvfWCePLf8ANN9AJ+vYWhLer94wtV7u/XfK0Z4kiOCH+nviNHPBG24H14xpS5PEIExGsdx8AhqyQyrKDL21uEWWIQfBa25js17zoS2KAjuBcVv2WgAQDuAfIB1//9k="
-                    mediaType="image/jpeg"
+                    base64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+                    mediaType="image/png"
                     uint8Array={new Uint8Array([])}
                   />
                 </div>
@@ -598,7 +957,7 @@ print(dijkstra(graph, 'A'))  # Output: {'A': 0, 'B': 1, 'C': 3, 'D': 4}`
                             <QueueItemAttachment>
                               <QueueItemImage
                                 alt="Algorithm diagram"
-                                src="https://via.placeholder.com/50x50/3b82f6/ffffff?text=IMG"
+                                src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTAiIGhlaWdodD0iNTAiIHZpZXdCb3g9IjAgMCA1MCA1MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjUwIiBoZWlnaHQ9IjUwIiBmaWxsPSIjM2I4MmY2Ii8+Cjx0ZXh0IHg9IjI1IiB5PSIyNSIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEyIiBmaWxsPSJ3aGl0ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZG9taW5hbnQtYmFzZWxpbmU9Im1pZGRsZSI+SU1HPC90ZXh0Pgo8L3N2Zz4K"
                               />
                               <QueueItemFile>documentation.pdf</QueueItemFile>
                             </QueueItemAttachment>
@@ -753,14 +1112,30 @@ print(dijkstra(graph, 'A'))  # Output: {'A': 0, 'B': 1, 'C': 3, 'D': 4}`
                       <GlobeIcon size={16} />
                       <span>Search</span>
                     </PromptInputButton>
-                    <PromptInputModelSelect onValueChange={setModel} value={model}>
+                    <PromptInputModelSelect onValueChange={handleModelChange} value={model}>
                       <PromptInputModelSelectTrigger>
                         <PromptInputModelSelectValue />
                       </PromptInputModelSelectTrigger>
                       <PromptInputModelSelectContent>
-                        <PromptInputModelSelectItem value="gpt-4">GPT-4</PromptInputModelSelectItem>
-                        <PromptInputModelSelectItem value="gpt-3.5-turbo">GPT-3.5 Turbo</PromptInputModelSelectItem>
-                        <PromptInputModelSelectItem value="claude-2">Claude 2</PromptInputModelSelectItem>
+                        {availableModels.map((modelData) => (
+                          <PromptInputModelSelectItem
+                            key={modelData.id}
+                            value={modelData.id}
+                          >
+                            {modelData.name}
+                          </PromptInputModelSelectItem>
+                        ))}
+                        {/* Fallback options if models fail to load */}
+                        {availableModels.length === 0 && (
+                          <>
+                            <PromptInputModelSelectItem value="openai:gpt-5">GPT-5</PromptInputModelSelectItem>
+                            <PromptInputModelSelectItem value="openai:gpt-5-mini">GPT-5 Mini</PromptInputModelSelectItem>
+                            <PromptInputModelSelectItem value="openai:gpt-4o">GPT-4o</PromptInputModelSelectItem>
+                            <PromptInputModelSelectItem value="openai:gpt-4o-mini">GPT-4o Mini</PromptInputModelSelectItem>
+                            <PromptInputModelSelectItem value="openai:gpt-3.5-turbo">GPT-3.5 Turbo</PromptInputModelSelectItem>
+                            <PromptInputModelSelectItem value="anthropic:claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</PromptInputModelSelectItem>
+                          </>
+                        )}
                       </PromptInputModelSelectContent>
                     </PromptInputModelSelect>
                   </PromptInputTools>
