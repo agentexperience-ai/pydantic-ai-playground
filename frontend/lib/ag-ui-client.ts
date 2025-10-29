@@ -40,11 +40,24 @@ export interface AgUiSession {
   metadata?: Record<string, any>;
 }
 
+export interface AgUiTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cachedInputTokens: number;
+  reasoningTokens: number;
+}
+
 export interface AgUiStreamChunk {
-  type: 'message' | 'tool_call' | 'metadata' | 'RUN_STARTED' | 'TEXT_MESSAGE_START' | 'TEXT_MESSAGE_CONTENT' | 'TEXT_MESSAGE_END' | 'RUN_FINISHED' | 'THINKING_PART';
+  type: 'message' | 'tool_call' | 'metadata' | 'RUN_STARTED' | 'TEXT_MESSAGE_START' | 'TEXT_MESSAGE_CONTENT' | 'TEXT_MESSAGE_END' | 'RUN_FINISHED' | 'THINKING_PART' | 'TOKEN_USAGE' | 'SUGGESTIONS' | 'TOOL_CALL' | 'ERROR';
   data: Partial<AgUiResponse>;
   session_id?: string;
   thinking_part?: AgUiThinkingPart;
+  usage?: AgUiTokenUsage;
+  suggestions?: string[];
+  toolName?: string;
+  args?: Record<string, any>;
+  error?: string;
 }
 
 class AgUiClient {
@@ -143,6 +156,27 @@ class AgUiClient {
                     content: data.thinking_part.content,
                     id: data.thinking_part.id,
                   };
+                }
+
+                // Handle token usage if present
+                if (data.usage) {
+                  chunkData.usage = data.usage;
+                }
+
+                // Handle suggestions if present
+                if (data.suggestions) {
+                  chunkData.suggestions = data.suggestions;
+                }
+
+                // Handle tool calls if present
+                if (data.toolName) {
+                  chunkData.toolName = data.toolName;
+                  chunkData.args = data.args;
+                }
+
+                // Handle errors if present
+                if (data.error) {
+                  chunkData.error = data.error;
                 }
 
                 onChunk(chunkData);

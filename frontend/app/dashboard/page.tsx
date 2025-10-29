@@ -55,6 +55,9 @@ import { useAgUiChat } from '@/hooks/use-ag-ui-chat'
 import { useAgUiMemory } from '@/hooks/use-ag-ui-memory'
 import { agUiClient } from '@/lib/ag-ui-client'
 
+// Demo Data Loader
+import { loadDemoAgUiData, shouldUseDemoData, getEmptyStateMessage } from '@/lib/demo-ag-ui-loader'
+
 import {
   ThumbsUpIcon,
   ThumbsDownIcon,
@@ -118,6 +121,9 @@ export default function Page() {
     isLoading,
     isStreaming,
     sendMessage,
+    toolCalls,
+    tokenUsage,
+    suggestions: dynamicSuggestions,
   } = useAgUiChat({
     onSessionChange: (newSessionId) => {
       console.log('Session changed:', newSessionId);
@@ -129,6 +135,10 @@ export default function Page() {
 
   // AG-UI Memory Hook
   const { loadMemorySummary } = useAgUiMemory();
+
+  // Load demo data for showcase when no conversation
+  const demoData = useMemo(() => loadDemoAgUiData(), []);
+  const useDemo = shouldUseDemoData(agUiMessages.length);
 
   // Models state
   const [availableModels, setAvailableModels] = useState<Array<{
@@ -157,8 +167,87 @@ export default function Page() {
     loadModels();
   }, [loadMemorySummary]);
 
+  // Data source selectors - use demo when no real conversation
+  const activeMessages = useDemo ? demoData.messages : agUiMessages;
+  const activeSuggestions = useDemo ? demoData.suggestions : (dynamicSuggestions.length > 0 ? dynamicSuggestions : []);
+  const activeToolCalls = useDemo ? demoData.toolCalls : toolCalls;
+  const activeTokenUsage = useDemo ? demoData.tokenUsage : tokenUsage;
+  const activeChainOfThought = useDemo ? demoData.chainOfThought : [];
+  const activeTasks = useDemo ? demoData.tasks : [];
+  const activeSources = useDemo ? demoData.sources : [];
+
   // Parse AG-UI messages and extract structured data for components
   const structuredData = useMemo(() => {
+    if (useDemo) {
+      // Use pre-structured demo data
+      const parsedData: AgUiComponentData[] = [];
+
+      // Add demo chain of thought
+      if (demoData.chainOfThought.length > 0) {
+        parsedData.push({
+          type: 'chain_of_thought',
+          data: demoData.chainOfThought
+        });
+      }
+
+      // Add demo artifacts (extract code blocks from demo messages)
+      demoData.messages.forEach((msg) => {
+        if (msg.role === 'assistant') {
+          const codeBlocks = msg.content.match(/```(?:\w+)?\n([\s\S]*?)```/g);
+          if (codeBlocks) {
+            codeBlocks.forEach((block, blockIndex) => {
+              const codeMatch = block.match(/```(\w+)?\n([\s\S]*?)```/);
+              if (codeMatch) {
+                parsedData.push({
+                  type: 'artifact',
+                  data: {
+                    title: `Code Block ${blockIndex + 1}`,
+                    description: 'Demo implementation from comprehensive example',
+                    code: codeMatch[2],
+                    language: codeMatch[1] || 'python',
+                  }
+                });
+              }
+            });
+          }
+
+          // Add demo response
+          parsedData.push({
+            type: 'response',
+            data: {
+              content: msg.content,
+              timestamp: msg.timestamp
+            }
+          });
+        }
+      });
+
+      // Add demo sources
+      if (demoData.sources.length > 0) {
+        parsedData.push({
+          type: 'sources',
+          data: demoData.sources
+        });
+      }
+
+      // Add demo reasoning
+      if (demoData.messages.some(m => m.thinking_parts)) {
+        const thinkingMsg = demoData.messages.find(m => m.thinking_parts);
+        if (thinkingMsg?.thinking_parts) {
+          parsedData.push({
+            type: 'reasoning',
+            data: {
+              content: thinkingMsg.thinking_parts.map(part => part.content).join('\n\n'),
+              parts: thinkingMsg.thinking_parts
+            }
+          });
+        }
+      }
+
+      return parsedData;
+    }
+
+    // Original real AG-UI data parsing logic
     const parsedData: AgUiComponentData[] = [];
 
     // Process each AG-UI message to extract structured information
@@ -270,10 +359,10 @@ export default function Page() {
     });
 
     return parsedData;
-  }, [agUiMessages]);
+  }, [useDemo, demoData, agUiMessages]);
 
   // Convert AG-UI messages to dashboard format
-  const messages = agUiMessages.map((msg, index) => ({
+  const messages = activeMessages.map((msg, index) => ({
     key: `msg-${index}-${msg.timestamp || index}`,
     from: msg.role === 'user' ? 'user' : 'assistant' as 'user' | 'assistant',
     content: msg.content,
@@ -727,17 +816,21 @@ print(dijkstra(graph, 'A'))  # Output: {'A': 0, 'B': 1, 'C': 3, 'D': 4}`
 
               {/* Right Column - Additional Components */}
               <div className="space-y-4">
-                {/* Suggestions Component */}
+                {/* Suggestions Component - Dynamic from AG-UI */}
                 <div className="bg-card rounded-lg border shadow-sm p-4">
                   <h3 className="font-semibold mb-3">Suggested Questions</h3>
                   <Suggestions>
-                    {suggestions.map((suggestion) => (
+                    {activeSuggestions.length > 0 ? activeSuggestions.map((suggestion) => (
                       <Suggestion
                         key={suggestion}
                         onClick={handleSuggestionClick}
                         suggestion={suggestion}
                       />
-                    ))}
+                    )) : (
+                      <div className="text-sm text-muted-foreground p-2">
+                        {getEmptyStateMessage('suggestions')}
+                      </div>
+                    )}
                   </Suggestions>
                 </div>
 
@@ -746,29 +839,14 @@ print(dijkstra(graph, 'A'))  # Output: {'A': 0, 'B': 1, 'C': 3, 'D': 4}`
                   <Task>
                     <TaskTrigger title="Current Tasks" />
                     <TaskContent>
-                      {/* Show dynamic tasks from AG-UI data */}
-                      {structuredData
-                        .filter(comp => comp.type === 'tasks')
-                        .flatMap(comp => (comp.data as TaskData[]))
-                        .map((task) => (
-                          <TaskItem key={task.key}>{task.value}</TaskItem>
-                        ))}
-                      {/* Show static tasks only when no dynamic tasks available */}
-                      {structuredData.filter(comp => comp.type === 'tasks').length === 0 && (
-                        <>
-                          {sampleTasks.map((task) => (
-                            <TaskItem key={task.key}>{task.value}</TaskItem>
-                          ))}
-                          <TaskItem>
-                            <span className="inline-flex items-center gap-1">
-                              Read
-                              <TaskItemFile>
-                                <div className="size-4 bg-blue-500 rounded flex items-center justify-center text-white text-xs">PY</div>
-                                <span>dijkstra.py</span>
-                              </TaskItemFile>
-                            </span>
-                          </TaskItem>
-                        </>
+                      {activeTasks.length > 0 ? (
+                        activeTasks.map((task, index) => (
+                          <TaskItem key={`task-${index}`}>{task}</TaskItem>
+                        ))
+                      ) : (
+                        <div className="text-sm text-muted-foreground p-4">
+                          {getEmptyStateMessage('tasks')}
+                        </div>
                       )}
                     </TaskContent>
                   </Task>
@@ -838,19 +916,19 @@ print(dijkstra(graph, 'A'))  # Output: {'A': 0, 'B': 1, 'C': 3, 'D': 4}`
                   </Branch>
                 </div>
 
-                {/* Context Component */}
+                {/* Context Component - Dynamic Token Usage from AG-UI */}
                 <div className="bg-card rounded-lg border shadow-sm">
                   <Context
-                    maxTokens={128_000}
-                    modelId="openai:gpt-5"
+                    maxTokens={useDemo ? demoData.context.maxTokens : 128_000}
+                    modelId={useDemo ? demoData.context.modelId : model}
                     usage={{
-                      inputTokens: 32_000,
-                      outputTokens: 8000,
-                      totalTokens: 40_000,
-                      cachedInputTokens: 0,
-                      reasoningTokens: 0,
+                      inputTokens: activeTokenUsage?.inputTokens || 0,
+                      outputTokens: activeTokenUsage?.outputTokens || 0,
+                      totalTokens: activeTokenUsage?.totalTokens || 0,
+                      cachedInputTokens: activeTokenUsage?.cachedInputTokens || 0,
+                      reasoningTokens: activeTokenUsage?.reasoningTokens || 0,
                     }}
-                    usedTokens={40_000}
+                    usedTokens={activeTokenUsage?.totalTokens || 0}
                   >
                     <ContextTrigger />
                     <ContextContent>
@@ -866,219 +944,210 @@ print(dijkstra(graph, 'A'))  # Output: {'A': 0, 'B': 1, 'C': 3, 'D': 4}`
                   </Context>
                 </div>
 
-                {/* Image Component */}
-                <div className="bg-card rounded-lg border shadow-sm p-4">
-                  <h3 className="font-semibold mb-2">Algorithm Visualization</h3>
-                  <div className="h-32 w-full bg-linear-to-r from-blue-500 to-purple-600 rounded-md flex items-center justify-center text-white font-semibold">
-                    Graph Visualization
-                  </div>
-                </div>
-
-                {/* AI Elements Image Component */}
-                <div className="bg-card rounded-lg border shadow-sm p-4">
-                  <h3 className="font-semibold mb-2">Generated Image</h3>
-                  <Image
-                    alt="Generated algorithm diagram"
-                    className="h-32 w-full object-cover rounded-md"
-                    base64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-                    mediaType="image/png"
-                    uint8Array={new Uint8Array([])}
-                  />
-                </div>
-
-                {/* OpenIn Component */}
-                <div className="bg-card rounded-lg border shadow-sm">
-                  <OpenIn query="How to implement Dijkstra's algorithm in Python?">
-                    <OpenInTrigger />
-                    <OpenInContent>
-                      <OpenInChatGPT />
-                      <OpenInClaude />
-                      <OpenInT3 />
-                      <OpenInScira />
-                      <OpenInv0 />
-                      <OpenInCursor />
-                    </OpenInContent>
-                  </OpenIn>
-                </div>
-
-                {/* Queue Component */}
-                <div className="bg-card rounded-lg border shadow-sm">
-                  <Queue>
-                    <QueueSection>
-                      <QueueSectionTrigger>
-                        <QueueSectionLabel count={3} label="Queued" />
-                      </QueueSectionTrigger>
-                      <QueueSectionContent>
-                        <QueueList>
-                          <QueueItem>
-                            <div className="flex items-center gap-2">
-                              <QueueItemIndicator />
-                              <QueueItemContent>Analyze time complexity</QueueItemContent>
-                              <QueueItemActions>
-                                <QueueItemAction
-                                  aria-label="Remove from queue"
-                                  onClick={() => console.log('Remove')}
-                                  title="Remove from queue"
-                                >
-                                  <RefreshCcwIcon size={12} />
-                                </QueueItemAction>
-                              </QueueItemActions>
-                            </div>
-                          </QueueItem>
-                          <QueueItem>
-                            <div className="flex items-center gap-2">
-                              <QueueItemIndicator />
-                              <QueueItemContent>Compare with other algorithms</QueueItemContent>
-                              <QueueItemActions>
-                                <QueueItemAction
-                                  aria-label="Remove from queue"
-                                  onClick={() => console.log('Remove')}
-                                  title="Remove from queue"
-                                >
-                                  <RefreshCcwIcon size={12} />
-                                </QueueItemAction>
-                              </QueueItemActions>
-                            </div>
-                          </QueueItem>
-                          <QueueItem>
-                            <div className="flex items-center gap-2">
-                              <QueueItemIndicator />
-                              <QueueItemContent>Documentation with attachments</QueueItemContent>
-                              <QueueItemActions>
-                                <QueueItemAction
-                                  aria-label="Remove from queue"
-                                  onClick={() => console.log('Remove')}
-                                  title="Remove from queue"
-                                >
-                                  <RefreshCcwIcon size={12} />
-                                </QueueItemAction>
-                              </QueueItemActions>
-                            </div>
-                            <QueueItemAttachment>
-                              <QueueItemImage
-                                alt="Algorithm diagram"
-                                src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTAiIGhlaWdodD0iNTAiIHZpZXdCb3g9IjAgMCA1MCA1MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjUwIiBoZWlnaHQ9IjUwIiBmaWxsPSIjM2I4MmY2Ii8+Cjx0ZXh0IHg9IjI1IiB5PSIyNSIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEyIiBmaWxsPSJ3aGl0ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZG9taW5hbnQtYmFzZWxpbmU9Im1pZGRsZSI+SU1HPC90ZXh0Pgo8L3N2Zz4K"
-                              />
-                              <QueueItemFile>documentation.pdf</QueueItemFile>
-                            </QueueItemAttachment>
-                            <QueueItemDescription>
-                              Complete documentation with diagrams and examples
-                            </QueueItemDescription>
-                          </QueueItem>
-                        </QueueList>
-                      </QueueSectionContent>
-                    </QueueSection>
-                  </Queue>
-                </div>
-
-                {/* Tool Component */}
-                <div className="bg-card rounded-lg border shadow-sm">
-                  <Tool>
-                    <ToolHeader type="tool-database_query" state="output-available" />
-                    <ToolContent>
-                      <ToolInput input={{
-                        query: 'SELECT COUNT(*) FROM algorithms WHERE complexity = ?',
-                        params: ['O((V+E) log V)'],
-                        database: 'knowledge_base',
-                      }} />
-                      <ToolOutput output={[
-                        { count: 1, algorithm: "Dijkstra's", complexity: "O((V+E) log V)" }
-                      ]} errorText={undefined} />
-                    </ToolContent>
-                  </Tool>
-                </div>
-
-                {/* WebPreview Component */}
-                <div className="bg-card rounded-lg border shadow-sm">
-                  <WebPreview
-                    defaultUrl="/"
-                    onUrlChange={(url) => console.log('URL changed to:', url)}
-                    style={{ height: '200px' }}
-                  >
-                    <WebPreviewNavigation>
-                      <WebPreviewNavigationButton
-                        tooltip="Go back"
-                        onClick={() => console.log('Go back')}
-                      >
-                        <ArrowLeftIcon className="size-4" />
-                      </WebPreviewNavigationButton>
-                      <WebPreviewNavigationButton
-                        tooltip="Go forward"
-                        onClick={() => console.log('Go forward')}
-                      >
-                        <ArrowRightIcon className="size-4" />
-                      </WebPreviewNavigationButton>
-                      <WebPreviewNavigationButton
-                        tooltip="Reload"
-                        onClick={() => console.log('Reload')}
-                      >
-                        <RefreshCcwIcon className="size-4" />
-                      </WebPreviewNavigationButton>
-                      <WebPreviewUrl />
-                      <WebPreviewNavigationButton
-                        tooltip="Select"
-                        onClick={() => console.log('Select')}
-                      >
-                        <MousePointerClickIcon className="size-4" />
-                      </WebPreviewNavigationButton>
-                      <WebPreviewNavigationButton
-                        tooltip="Open in new tab"
-                        onClick={() => console.log('Open in new tab')}
-                      >
-                        <ExternalLinkIcon className="size-4" />
-                      </WebPreviewNavigationButton>
-                      <WebPreviewNavigationButton
-                        tooltip="Maximize"
-                        onClick={() => console.log('Maximize')}
-                      >
-                        <Maximize2Icon className="size-4" />
-                      </WebPreviewNavigationButton>
-                    </WebPreviewNavigation>
-                    <WebPreviewBody src="https://ai-sdk.dev/" />
-                    <WebPreviewConsole logs={[
-                      {
-                        level: 'log' as const,
-                        message: 'Algorithm visualization loaded',
-                        timestamp: new Date(),
-                      }
-                    ]} />
-                  </WebPreview>
-                </div>
-
-                {/* InlineCitation Component */}
-                <div className="bg-card rounded-lg border shadow-sm p-4">
-                  <h3 className="font-semibold mb-2">Algorithm Sources</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Dijkstra&apos;s algorithm was first described in{' '}
-                    <InlineCitation>
-                      <InlineCitationText>a 1959 paper by Edsger W. Dijkstra</InlineCitationText>
-                      <InlineCitationCard>
-                        <InlineCitationCardTrigger
-                          sources={['https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm']}
+                {/* Demo Components - Only show when in demo mode */}
+                {useDemo && (
+                  <>
+                    {/* Demo Images */}
+                    {demoData.images.length > 0 && demoData.images.map((image, index) => (
+                      <div key={`image-${index}`} className="bg-card rounded-lg border shadow-sm p-4">
+                        <h3 className="font-semibold mb-2">{image.caption || image.alt}</h3>
+                        <Image
+                          alt={image.alt}
+                          className="h-32 w-full object-cover rounded-md"
+                          base64={image.base64}
+                          mediaType={image.mediaType}
+                          uint8Array={new Uint8Array([])}
                         />
-                        <InlineCitationCardBody>
-                          <InlineCitationCarousel>
-                            <InlineCitationCarouselHeader>
-                              <InlineCitationCarouselPrev />
-                              <InlineCitationCarouselNext />
-                              <InlineCitationCarouselIndex />
-                            </InlineCitationCarouselHeader>
-                            <InlineCitationCarouselContent>
-                              <InlineCitationCarouselItem>
-                                <InlineCitationSource
-                                  title="Dijkstra's Algorithm - Wikipedia"
-                                  url="https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm"
-                                  description="A comprehensive overview of Dijkstra's algorithm including history, implementation, and applications."
-                                />
-                              </InlineCitationCarouselItem>
-                            </InlineCitationCarouselContent>
-                          </InlineCitationCarousel>
-                        </InlineCitationCardBody>
-                      </InlineCitationCard>
-                    </InlineCitation>
-                    .
-                  </p>
-                </div>
+                      </div>
+                    ))}
+
+                    {/* OpenIn Component */}
+                    <div className="bg-card rounded-lg border shadow-sm">
+                      <OpenIn query="How to implement Dijkstra's algorithm in Python?">
+                        <OpenInTrigger />
+                        <OpenInContent>
+                          <OpenInChatGPT />
+                          <OpenInClaude />
+                          <OpenInT3 />
+                          <OpenInScira />
+                          <OpenInv0 />
+                          <OpenInCursor />
+                        </OpenInContent>
+                      </OpenIn>
+                    </div>
+
+                    {/* Queue Component with Demo Data */}
+                    {demoData.queue.pending.length > 0 && (
+                      <div className="bg-card rounded-lg border shadow-sm">
+                        <Queue>
+                          <QueueSection>
+                            <QueueSectionTrigger>
+                              <QueueSectionLabel count={demoData.queue.pending.length} label="Queued" />
+                            </QueueSectionTrigger>
+                            <QueueSectionContent>
+                              <QueueList>
+                                {demoData.queue.pending.map((item) => (
+                                  <QueueItem key={item.id}>
+                                    <div className="flex items-center gap-2">
+                                      <QueueItemIndicator />
+                                      <QueueItemContent>{item.title}</QueueItemContent>
+                                      <QueueItemActions>
+                                        <QueueItemAction
+                                          aria-label="Remove from queue"
+                                          onClick={() => console.log('Remove', item.id)}
+                                          title="Remove from queue"
+                                        >
+                                          <RefreshCcwIcon size={12} />
+                                        </QueueItemAction>
+                                      </QueueItemActions>
+                                    </div>
+                                    {item.attachments.length > 0 && (
+                                      <QueueItemAttachment>
+                                        {item.attachments.map((attachment, idx) => (
+                                          attachment.type === 'file' ? (
+                                            <QueueItemFile key={idx}>{attachment.name}</QueueItemFile>
+                                          ) : (
+                                            <QueueItemImage
+                                              key={idx}
+                                              alt={attachment.description}
+                                              src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTAiIGhlaWdodD0iNTAiIHZpZXdCb3g9IjAgMCA1MCA1MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjUwIiBoZWlnaHQ9IjUwIiBmaWxsPSIjM2I4MmY2Ii8+Cjx0ZXh0IHg9IjI1IiB5PSIyNSIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEyIiBmaWxsPSJ3aGl0ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZG9taW5hbnQtYmFzZWxpbmU9Im1pZGRsZSI+SU1HPC90ZXh0Pgo8L3N2Zz4K"
+                                            />
+                                          )
+                                        ))}
+                                      </QueueItemAttachment>
+                                    )}
+                                    <QueueItemDescription>
+                                      {item.description}
+                                    </QueueItemDescription>
+                                  </QueueItem>
+                                ))}
+                              </QueueList>
+                            </QueueSectionContent>
+                          </QueueSection>
+                        </Queue>
+                      </div>
+                    )}
+
+                {/* Tool Component - Dynamic from AG-UI Tool Calls */}
+                {activeToolCalls.length > 0 ? (
+                  activeToolCalls.map((toolCall, index) => (
+                    <div key={`tool-${index}`} className="bg-card rounded-lg border shadow-sm">
+                      <Tool>
+                        <ToolHeader type={`tool-${toolCall.name}`} state="output-available" />
+                        <ToolContent>
+                          <ToolInput input={toolCall.arguments} />
+                          <ToolOutput output={toolCall.result ? [toolCall.result] : []} errorText={undefined} />
+                        </ToolContent>
+                      </Tool>
+                    </div>
+                  ))
+                ) : (
+                  <div className="bg-card rounded-lg border shadow-sm p-4">
+                    <div className="text-sm text-muted-foreground">
+                      {getEmptyStateMessage('toolCalls')}
+                    </div>
+                  </div>
+                )}
+
+                    {/* WebPreview Component with Demo Data */}
+                    {demoData.webPreview && (
+                      <div className="bg-card rounded-lg border shadow-sm">
+                        <WebPreview
+                          defaultUrl={demoData.webPreview.url}
+                          onUrlChange={(url) => console.log('URL changed to:', url)}
+                          style={{ height: '200px' }}
+                        >
+                          <WebPreviewNavigation>
+                            <WebPreviewNavigationButton
+                              tooltip="Go back"
+                              onClick={() => console.log('Go back')}
+                            >
+                              <ArrowLeftIcon className="size-4" />
+                            </WebPreviewNavigationButton>
+                            <WebPreviewNavigationButton
+                              tooltip="Go forward"
+                              onClick={() => console.log('Go forward')}
+                            >
+                              <ArrowRightIcon className="size-4" />
+                            </WebPreviewNavigationButton>
+                            <WebPreviewNavigationButton
+                              tooltip="Reload"
+                              onClick={() => console.log('Reload')}
+                            >
+                              <RefreshCcwIcon className="size-4" />
+                            </WebPreviewNavigationButton>
+                            <WebPreviewUrl />
+                            <WebPreviewNavigationButton
+                              tooltip="Select"
+                              onClick={() => console.log('Select')}
+                            >
+                              <MousePointerClickIcon className="size-4" />
+                            </WebPreviewNavigationButton>
+                            <WebPreviewNavigationButton
+                              tooltip="Open in new tab"
+                              onClick={() => console.log('Open in new tab')}
+                            >
+                              <ExternalLinkIcon className="size-4" />
+                            </WebPreviewNavigationButton>
+                            <WebPreviewNavigationButton
+                              tooltip="Maximize"
+                              onClick={() => console.log('Maximize')}
+                            >
+                              <Maximize2Icon className="size-4" />
+                            </WebPreviewNavigationButton>
+                          </WebPreviewNavigation>
+                          <WebPreviewBody src={demoData.webPreview.url} />
+                          <WebPreviewConsole logs={[
+                            {
+                              level: 'log' as const,
+                              message: demoData.webPreview.description,
+                              timestamp: new Date(),
+                            }
+                          ]} />
+                        </WebPreview>
+                      </div>
+                    )}
+
+                    {/* InlineCitation Component with Demo Data */}
+                    {demoData.inlineCitation && (
+                      <div className="bg-card rounded-lg border shadow-sm p-4">
+                        <h3 className="font-semibold mb-2">Algorithm Sources</h3>
+                        <p className="text-sm text-muted-foreground">
+                          {demoData.inlineCitation.text}{' '}
+                          <InlineCitation>
+                            <InlineCitationText>from authoritative sources</InlineCitationText>
+                            <InlineCitationCard>
+                              <InlineCitationCardTrigger
+                                sources={demoData.inlineCitation.sources.map(s => s.url)}
+                              />
+                              <InlineCitationCardBody>
+                                <InlineCitationCarousel>
+                                  <InlineCitationCarouselHeader>
+                                    <InlineCitationCarouselPrev />
+                                    <InlineCitationCarouselNext />
+                                    <InlineCitationCarouselIndex />
+                                  </InlineCitationCarouselHeader>
+                                  <InlineCitationCarouselContent>
+                                    {demoData.inlineCitation.sources.map((source, idx) => (
+                                      <InlineCitationCarouselItem key={idx}>
+                                        <InlineCitationSource
+                                          title={source.title}
+                                          url={source.url}
+                                          description={source.description}
+                                        />
+                                      </InlineCitationCarouselItem>
+                                    ))}
+                                  </InlineCitationCarouselContent>
+                                </InlineCitationCarousel>
+                              </InlineCitationCardBody>
+                            </InlineCitationCard>
+                          </InlineCitation>
+                          .
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </div>
 

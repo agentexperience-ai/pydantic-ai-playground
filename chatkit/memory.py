@@ -44,9 +44,14 @@ class ChatKitMemoryTool(BetaAbstractMemoryTool):
             with open(self.memory_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, FileNotFoundError):
-            # Reset memory if corrupted
+            # Reset memory if corrupted - return default structure instead of recursing
             self._ensure_memory_file()
-            return self._load_memory()
+            return {
+                "user_facts": {},
+                "notes": [],
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat()
+            }
 
     def _save_memory(self, memory: Dict[str, Any]):
         """Save memory to storage"""

@@ -1,21 +1,17 @@
 {
-  "user_preferences": {},
-  "conversation_history": [],
   "user_facts": {
-    "test_fact": "This is a test fact",
-    "user_name": "Michelangelo",
-    "preferred beverage": "coffee",
-    "preferred_drink": "coffee",
-    "name": "Mike",
-    "nickname": "Mike"
+    "user_name": "Michelangelo"
   },
   "notes": [
     {
-      "title": "Test Note",
-      "content": "This is a test note content",
-      "created_at": "2025-10-25T20:52:54.280479"
+      "title": "Penpot Integration Plan - Issue 1",
+      "content": "**Understanding Penpot Architecture**\n1. Explore the technical documentation of Penpot to grasp its architecture.\n2. Identify the components and services that Penpot offers.\n3. Assess the dependencies and requirements for running Penpot on self-hosted environments.\n4. Consider how data handling and user permissions are managed in Penpot.",
+      "created_at": "2025-10-29T20:22:50.583365"
     }
   ],
-  "created_at": "2025-10-25T20:28:17.353358",
-  "updated_at": "2025-10-26T13:04:55.331800"
+  "created_at": "2025-10-29T20:21:54.298867",
+  "updated_at": "2025-10-29T20:22:50.583386"
+}
+}
+  "updated_at": "2025-10-29T20:22:50.583450"
 }

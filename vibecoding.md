@@ -19,6 +19,7 @@ claude
 
 - **NEVER give up on a task.** If you choose to simplify, you **must** justify it with clear, evidence-based reasoning.
 - **NEVER use mock or hard-coded data** unless the user specifically requests it.
+- **ALWAYS refer to online official libraries documentation** to make sure it’s up to date and latest version. This must be the principle to debug.
 - **ALWAYS audit and assess the current codebase first** to ensure it’s up to date and working. This must be the foundation for every task to avoid duplication, misalignment, and wasted effort.
 - **ALWAYS web search the latest python libraries version when you install new libraries or when you face issue with the current code, check if there is a newer library.** - test in the virtual enviroment by activanting it before if necessary.
 - **ALWAYS update existing files in place.**

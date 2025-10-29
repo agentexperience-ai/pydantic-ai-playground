@@ -9,6 +9,21 @@ export interface UseAgUiChatOptions {
   onError?: (error: Error) => void;
 }
 
+export interface AgUiToolCall {
+  name: string;
+  arguments: Record<string, any>;
+  result?: any;
+  status: 'pending' | 'executing' | 'completed' | 'error';
+}
+
+export interface AgUiTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cachedInputTokens: number;
+  reasoningTokens: number;
+}
+
 export interface UseAgUiChatReturn {
   // State
   messages: AgUiMessage[];
@@ -16,6 +31,9 @@ export interface UseAgUiChatReturn {
   isLoading: boolean;
   isStreaming: boolean;
   error: Error | null;
+  toolCalls: AgUiToolCall[];
+  tokenUsage: AgUiTokenUsage | null;
+  suggestions: string[];
 
   // Actions
   sendMessage: (message: string) => Promise<void>;
@@ -35,6 +53,9 @@ export function useAgUiChat(options: UseAgUiChatOptions = {}): UseAgUiChatReturn
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [toolCalls, setToolCalls] = useState<AgUiToolCall[]>([]);
+  const [tokenUsage, setTokenUsage] = useState<AgUiTokenUsage | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -140,6 +161,28 @@ export function useAgUiChat(options: UseAgUiChatOptions = {}): UseAgUiChatReturn
               });
             }
 
+            // Handle token usage
+            if (chunk.type === 'TOKEN_USAGE' && chunk.usage) {
+              setTokenUsage(chunk.usage);
+            }
+
+            // Handle suggestions
+            if (chunk.type === 'SUGGESTIONS' && chunk.suggestions) {
+              setSuggestions(chunk.suggestions);
+            }
+
+            // Handle tool calls
+            if (chunk.type === 'TOOL_CALL' && chunk.toolName) {
+              setToolCalls(prev => [
+                ...prev,
+                {
+                  name: chunk.toolName!,
+                  arguments: chunk.args || {},
+                  status: 'completed',
+                },
+              ]);
+            }
+
             if (chunk.type === 'RUN_FINISHED') {
               setIsStreaming(false);
             }
@@ -190,6 +233,9 @@ export function useAgUiChat(options: UseAgUiChatOptions = {}): UseAgUiChatReturn
     isLoading,
     isStreaming,
     error,
+    toolCalls,
+    tokenUsage,
+    suggestions,
 
     // Actions
     sendMessage,
