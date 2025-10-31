@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import {
+  Activity,
   BookOpen,
   Bot,
   Command,
@@ -94,6 +95,17 @@ const data = {
         {
           title: "Changelog",
           url: "#",
+        },
+      ],
+    },
+    {
+      title: "System Monitor",
+      url: "/monitor",
+      icon: Activity,
+      items: [
+        {
+          title: "Real-time View",
+          url: "/monitor",
         },
       ],
     },

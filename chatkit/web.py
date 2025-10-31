@@ -545,7 +545,7 @@ class ChatKitServer:
                                 name='task_update',
                                 value={'tasks': tool_calls_for_tasks}
                             )
-                            event_str = f"data: {encoder.encode(task_event)}\n\n"
+                            event_str = encoder.encode(task_event)
                             yield event_str.encode() if is_bytes_stream else event_str
 
                         elif data.get('type') == 'TOOL_CALL_RESULT':
@@ -560,7 +560,7 @@ class ChatKitServer:
                                 name='task_update',
                                 value={'tasks': tool_calls_for_tasks}
                             )
-                            event_str = f"data: {encoder.encode(task_event)}\n\n"
+                            event_str = encoder.encode(task_event)
                             yield event_str.encode() if is_bytes_stream else event_str
 
                         # Capture token usage from RUN_FINISHED
@@ -579,7 +579,7 @@ class ChatKitServer:
                         name='token_usage',
                         value=final_usage
                     )
-                    event_str = f"data: {encoder.encode(usage_event)}\n\n"
+                    event_str = encoder.encode(usage_event)
                     yield event_str.encode() if is_bytes_stream else event_str
 
                 # Emit contextual suggestions
@@ -595,7 +595,7 @@ class ChatKitServer:
                     name='suggestions',
                     value=suggestions
                 )
-                event_str = f"data: {encoder.encode(suggestions_event)}\n\n"
+                event_str = encoder.encode(suggestions_event)
                 yield event_str.encode() if is_bytes_stream else event_str
 
             except Exception as e:
