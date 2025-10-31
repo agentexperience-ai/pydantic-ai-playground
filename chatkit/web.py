@@ -9,10 +9,14 @@ from pydantic import BaseModel
 import json
 import logging
 import sys
+from typing import AsyncIterator, Dict, List
+from starlette.responses import StreamingResponse
 
 from .core import ChatKitAgent
 from .memory import chatkit_memory
 from pydantic_ai.ag_ui import handle_ag_ui_request
+from ag_ui.core import CustomEvent, RunAgentInput
+from ag_ui.encoder import EventEncoder
 
 # Configure logging
 logging.basicConfig(
@@ -91,6 +95,15 @@ class ChatKitServer:
             logger.info("GET /api/models - Fetching available models")
             return {
                 "models": [
+                    {
+                        "id": "openai-responses:gpt-5",
+                        "name": "GPT-5 (Web Search)",
+                        "provider": "openai",
+                        "family": "gpt-5",
+                        "supports_thinking": True,
+                        "supports_web_search": True,
+                        "description": "Latest GPT-5 model with web search capabilities",
+                    },
                     {
                         "id": "openai:gpt-5",
                         "name": "GPT-5",
@@ -486,11 +499,178 @@ class ChatKitServer:
                     status_code=500, detail=f"Error adding note: {str(e)}"
                 )
 
-        # AG-UI protocol endpoint
+        # Message history storage (thread_id -> messages)
+        self.message_history: Dict[str, List[Dict]] = {}
+        self.max_history_messages = 10  # Configurable: keep last 10 messages
+
+        # Tracking for custom events
+        self.active_tool_calls: Dict[str, List[Dict]] = {}  # thread_id -> tool calls
+
+        async def custom_event_wrapper(original_stream: AsyncIterator, thread_id: str) -> AsyncIterator:
+            """Wraps AG-UI stream to inject CUSTOM events for tasks, suggestions, usage"""
+            encoder = EventEncoder()
+            tool_calls_for_tasks = []
+            final_usage = None
+            is_bytes_stream = None
+
+            async for chunk in original_stream:
+                # Detect stream type on first chunk
+                if is_bytes_stream is None:
+                    is_bytes_stream = isinstance(chunk, bytes)
+
+                # Forward original chunk
+                yield chunk
+
+                # Parse the chunk to track tool calls
+                try:
+                    # Handle both bytes and str chunks
+                    if isinstance(chunk, bytes):
+                        chunk_str = chunk.decode('utf-8')
+                    else:
+                        chunk_str = chunk
+
+                    if chunk_str.startswith('data: '):
+                        data = json.loads(chunk_str[6:])
+
+                        # Track tool calls for task generation
+                        if data.get('type') == 'TOOL_CALL_START':
+                            tool_name = data.get('tool_name', 'unknown')
+                            tool_calls_for_tasks.append({
+                                'key': tool_name,
+                                'value': 'Starting...',
+                                'status': 'pending'
+                            })
+                            # Emit task as CUSTOM event
+                            task_event = CustomEvent(
+                                name='task_update',
+                                value={'tasks': tool_calls_for_tasks}
+                            )
+                            event_str = f"data: {encoder.encode(task_event)}\n\n"
+                            yield event_str.encode() if is_bytes_stream else event_str
+
+                        elif data.get('type') == 'TOOL_CALL_RESULT':
+                            tool_name = data.get('tool_name', 'unknown')
+                            # Update task status
+                            for task in tool_calls_for_tasks:
+                                if task['key'] == tool_name:
+                                    task['status'] = 'completed'
+                                    task['value'] = 'Completed successfully'
+                            # Emit updated tasks
+                            task_event = CustomEvent(
+                                name='task_update',
+                                value={'tasks': tool_calls_for_tasks}
+                            )
+                            event_str = f"data: {encoder.encode(task_event)}\n\n"
+                            yield event_str.encode() if is_bytes_stream else event_str
+
+                        # Capture token usage from RUN_FINISHED
+                        elif data.get('type') == 'RUN_FINISHED' and data.get('usage'):
+                            final_usage = data['usage']
+
+                except Exception as e:
+                    logger.error(f"Error processing chunk for custom events: {e}")
+                    continue
+
+            # After stream completes, emit final custom events
+            try:
+                # Emit token usage
+                if final_usage:
+                    usage_event = CustomEvent(
+                        name='token_usage',
+                        value=final_usage
+                    )
+                    event_str = f"data: {encoder.encode(usage_event)}\n\n"
+                    yield event_str.encode() if is_bytes_stream else event_str
+
+                # Emit contextual suggestions
+                suggestions = [
+                    "Can you explain this in more detail?",
+                    "Show me a practical example",
+                    "What are the alternatives?",
+                    "How does this compare to other approaches?",
+                    "What are the best practices for this?"
+                ]
+
+                suggestions_event = CustomEvent(
+                    name='suggestions',
+                    value=suggestions
+                )
+                event_str = f"data: {encoder.encode(suggestions_event)}\n\n"
+                yield event_str.encode() if is_bytes_stream else event_str
+
+            except Exception as e:
+                logger.error(f"Error emitting final custom events: {e}")
+
+        # AG-UI protocol endpoint with history and custom events
         @self.app.post("/agui")
         async def agui_endpoint(request: Request):
-            """AG-UI protocol endpoint for streaming AI interactions"""
-            return await handle_ag_ui_request(self.agent.agent, request)
+            """AG-UI protocol endpoint with message history and custom events"""
+            try:
+                # Parse incoming request
+                body = await request.json()
+                thread_id = body.get("threadId", "default")
+                incoming_messages = body.get("messages", [])
+
+                logger.info(f"AG-UI: Request for thread {thread_id} with {len(incoming_messages)} messages")
+
+                # Get or initialize message history for this thread
+                if thread_id not in self.message_history:
+                    self.message_history[thread_id] = []
+
+                # Add incoming messages to history (only user messages)
+                for msg in incoming_messages:
+                    if msg.get("role") == "user":
+                        self.message_history[thread_id].append({
+                            "role": "user",
+                            "content": msg.get("content", ""),
+                            "id": msg.get("id")
+                        })
+
+                # Keep only last N messages
+                self.message_history[thread_id] = self.message_history[thread_id][-self.max_history_messages:]
+
+                # Build complete message context (minimum 4 messages as requested)
+                context_messages = self.message_history[thread_id][-4:]  # Last 4 minimum
+
+                logger.info(f"AG-UI: Using {len(context_messages)} messages from history")
+
+                # Update body with context
+                body["messages"] = context_messages + [msg for msg in incoming_messages if msg.get("role") == "user" and msg not in context_messages]
+
+                # Create new request with modified body
+                modified_body_bytes = json.dumps(body).encode('utf-8')
+
+                # Create a new Request object with the modified body
+                scope = request.scope.copy()
+                scope["body"] = modified_body_bytes
+
+                # Create receive coroutine that returns the modified body
+                async def receive():
+                    return {
+                        "type": "http.request",
+                        "body": modified_body_bytes,
+                        "more_body": False,
+                    }
+
+                modified_request = Request(scope, receive)
+
+                # Get standard AG-UI response with modified request
+                response = await handle_ag_ui_request(self.agent.agent, modified_request)
+
+                # Wrap the streaming response with custom events
+                if isinstance(response, StreamingResponse):
+                    wrapped_stream = custom_event_wrapper(response.body_iterator, thread_id)
+                    return StreamingResponse(
+                        wrapped_stream,
+                        media_type="text/event-stream",
+                        headers=response.headers
+                    )
+
+                return response
+
+            except Exception as e:
+                logger.error(f"AG-UI: Error in endpoint - {str(e)}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
 
     def run(self, host: str = "0.0.0.0", port: int = 8000, debug: bool = False):
         """Run the FastAPI server"""

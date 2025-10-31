@@ -126,13 +126,41 @@
     }
   ],
   "tasks": [
-    "Initialize distance dictionary with infinity for all nodes",
-    "Set starting node distance to zero",
-    "Create priority queue with (distance, node) tuples",
-    "Process nodes in order of shortest known distance",
-    "Update neighbor distances when shorter path found",
-    "Mark nodes as visited to avoid reprocessing",
-    "Return final distance dictionary"
+    {
+      "key": "task-1",
+      "value": "Initialize distance dictionary with infinity for all nodes",
+      "status": "completed"
+    },
+    {
+      "key": "task-2",
+      "value": "Set starting node distance to zero",
+      "status": "completed"
+    },
+    {
+      "key": "task-3",
+      "value": "Create priority queue with (distance, node) tuples",
+      "status": "completed"
+    },
+    {
+      "key": "task-4",
+      "value": "Process nodes in order of shortest known distance",
+      "status": "in_progress"
+    },
+    {
+      "key": "task-5",
+      "value": "Update neighbor distances when shorter path found",
+      "status": "pending"
+    },
+    {
+      "key": "task-6",
+      "value": "Mark nodes as visited to avoid reprocessing",
+      "status": "pending"
+    },
+    {
+      "key": "task-7",
+      "value": "Return final distance dictionary",
+      "status": "pending"
+    }
   ],
   "sources": [
     {

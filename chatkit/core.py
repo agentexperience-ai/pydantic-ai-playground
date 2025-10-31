@@ -2,7 +2,7 @@
 
 from typing import AsyncIterator, Any, Dict, List, Optional
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+from pydantic_ai import Agent, WebSearchTool
 from pydantic_ai.exceptions import (
     ModelRetry,
     AgentRunError,
@@ -112,8 +112,8 @@ class ChatKitAgent:
     """Main chat agent with pydantic-ai"""
 
     def __init__(self, model: str = None):
-        # Use environment variable or default model
-        self.model = model or os.getenv("OPENAI_MODEL", "openai:gpt-4o-mini")
+        # Use environment variable or default model with web search enabled
+        self.model = model or os.getenv("OPENAI_MODEL", "openai-responses:gpt-5")
 
         # Check if API key is available
         api_key = os.getenv("OPENAI_API_KEY")
@@ -137,11 +137,24 @@ class ChatKitAgent:
 
     def _create_agent(self, model: str):
         """Create a new agent with the specified model"""
-        return Agent(
-            model=model,
-            system_prompt=self.system_prompt,
-            toolsets=[self.memory_toolset],
-        )
+        # Check if this is an OpenAI Responses model that supports web search
+        if model.startswith("openai-responses:") or model == "openai:gpt-5":
+            # Use OpenAI Responses model with web search
+            actual_model = model if model.startswith("openai-responses:") else "openai-responses:gpt-5"
+
+            return Agent(
+                model=actual_model,
+                system_prompt=self.system_prompt,
+                toolsets=[self.memory_toolset],
+                builtin_tools=[WebSearchTool()],  # Enable OpenAI native web search
+            )
+        else:
+            # For non-OpenAI Responses models, use standard Agent without web search
+            return Agent(
+                model=model,
+                system_prompt=self.system_prompt,
+                toolsets=[self.memory_toolset],
+            )
 
     def switch_model(self, model: str):
         """Switch to a different model"""

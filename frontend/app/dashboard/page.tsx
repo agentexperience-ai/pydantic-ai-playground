@@ -124,6 +124,9 @@ export default function Page() {
     toolCalls,
     tokenUsage,
     suggestions: dynamicSuggestions,
+    tasks: dynamicTasks,
+    sources: dynamicSources,
+    chainOfThought: dynamicChainOfThought,
   } = useAgUiChat({
     onSessionChange: (newSessionId) => {
       console.log('Session changed:', newSessionId);
@@ -172,9 +175,9 @@ export default function Page() {
   const activeSuggestions = useDemo ? demoData.suggestions : (dynamicSuggestions.length > 0 ? dynamicSuggestions : []);
   const activeToolCalls = useDemo ? demoData.toolCalls : toolCalls;
   const activeTokenUsage = useDemo ? demoData.tokenUsage : tokenUsage;
-  const activeChainOfThought = useDemo ? demoData.chainOfThought : [];
-  const activeTasks = useDemo ? demoData.tasks : [];
-  const activeSources = useDemo ? demoData.sources : [];
+  const activeChainOfThought = useDemo ? demoData.chainOfThought : dynamicChainOfThought;
+  const activeTasks = useDemo ? demoData.tasks : dynamicTasks;
+  const activeSources = useDemo ? demoData.sources : dynamicSources;
 
   // Parse AG-UI messages and extract structured data for components
   const structuredData = useMemo(() => {
@@ -841,7 +844,10 @@ print(dijkstra(graph, 'A'))  # Output: {'A': 0, 'B': 1, 'C': 3, 'D': 4}`
                     <TaskContent>
                       {activeTasks.length > 0 ? (
                         activeTasks.map((task, index) => (
-                          <TaskItem key={`task-${index}`}>{task}</TaskItem>
+                          <TaskItem key={`task-${index}`}>
+                            <strong>{task.key}:</strong> {task.value}
+                            {task.status && <span className="ml-2 text-xs text-muted-foreground">({task.status})</span>}
+                          </TaskItem>
                         ))
                       ) : (
                         <div className="text-sm text-muted-foreground p-4">

@@ -185,6 +185,12 @@ minimal_system_prompt: |
   4. **add_note**: When conversation contains noteworthy context
      - Patterns: important topics, decisions, or conversational context
      - Action: Call add_note(title="...", content="...") to persist notes
+
+  5. **Built-in Web Search** (OpenAI native):
+     - Automatically available for OpenAI models (gpt-4o, gpt-5, etc.)
+     - No manual tool call needed - model decides when to search web
+     - Provides real-time information from the internet
+     - Use for: current events, latest information, sports scores, news, facts
   </memory_tools_usage>
 
   <tool_execution>
@@ -224,4 +230,7 @@ minimal_system_prompt: |
 
   User: "I love Python and hiking"
   You: [call add_fact(fact="Loves Python"), call add_fact(fact="Enjoys hiking")] → "Great! I've noted your interests in Python and hiking."
+
+  User: "What's the latest score for AS Roma?"
+  You: [OpenAI automatically searches web] → "AS Roma's latest match was against [team] with a score of [score]. The match took place on [date]."
   </examples>

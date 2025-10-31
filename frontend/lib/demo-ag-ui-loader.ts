@@ -39,6 +39,7 @@ export interface DemoSource {
 export interface DemoTask {
   key: string;
   value: string;
+  status?: 'pending' | 'in_progress' | 'completed';
 }
 
 export interface DemoPlanStep {
@@ -81,7 +82,7 @@ export interface DemoAgUiData {
   tokenUsage: DemoTokenUsage;
   suggestions: string[];
   chainOfThought: DemoChainOfThoughtStep[];
-  tasks: string[];
+  tasks: DemoTask[];
   sources: DemoSource[];
   plan: {
     title: string;
@@ -145,7 +146,11 @@ export function loadDemoAgUiData(): DemoAgUiData {
       content: step.content,
       type: step.type as 'text' | 'reasoning' | 'function_call' | undefined,
     })),
-    tasks: demoData.tasks,
+    tasks: demoData.tasks.map(task => ({
+      key: task.key,
+      value: task.value,
+      status: task.status as 'pending' | 'in_progress' | 'completed' | undefined,
+    })),
     sources: demoData.sources,
     plan: {
       title: demoData.plan.title,

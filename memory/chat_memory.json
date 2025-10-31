@@ -1,17 +1,32 @@
 {
-  "user_facts": {
-    "user_name": "Michelangelo"
-  },
+  "user_facts": {},
   "notes": [
     {
-      "title": "Penpot Integration Plan - Issue 1",
-      "content": "**Understanding Penpot Architecture**\n1. Explore the technical documentation of Penpot to grasp its architecture.\n2. Identify the components and services that Penpot offers.\n3. Assess the dependencies and requirements for running Penpot on self-hosted environments.\n4. Consider how data handling and user permissions are managed in Penpot.",
-      "created_at": "2025-10-29T20:22:50.583365"
+      "title": "Test Task",
+      "content": "This is a test task.",
+      "created_at": "2025-10-29T20:52:40.936871"
+    },
+    {
+      "title": "Sub-Task B - Probability",
+      "content": "P(3 Heads) = (45/128); P(Biased | 3 Heads) = (21/34).",
+      "created_at": "2025-10-29T21:07:39.953157"
+    },
+    {
+      "title": "Sub-Task D - Grid Paths",
+      "content": "Distinct paths from (0,0) to (6,6): 128.",
+      "created_at": "2025-10-29T21:07:39.954034"
+    },
+    {
+      "title": "Sub-Task E - Logic Mini-Grid",
+      "content": "Unique mapping: A-J3-M1, B-J2-M2, C-J1-M3.",
+      "created_at": "2025-10-29T21:07:39.955543"
+    },
+    {
+      "title": "Test Run Results Correction",
+      "content": "A) Schedule: Infeasible; required time 7h but only 6 slots available.\n\nB) Probability: \nP(exactly 3H) = 0.3102; \nP(biased|3H) ≈ 0.5971. (Former answers were incorrect).\n\nC) Cryptarithms: SEND + MORE = MONEY has a solution (9567 + 1085 = 10652).\n No distinct base-10 solution for PLAIN + PLAIN.\n\nD) Grid paths: 61 valid paths avoiding obstacles.\n\nE) Logic mini-grid: Multiple solutions available based on clues.",
+      "created_at": "2025-10-29T21:09:34.658003"
     }
   ],
-  "created_at": "2025-10-29T20:21:54.298867",
-  "updated_at": "2025-10-29T20:22:50.583386"
-}
-}
-  "updated_at": "2025-10-29T20:22:50.583450"
+  "created_at": "2025-10-29T20:52:40.936835",
+  "updated_at": "2025-10-29T21:09:34.658011"
 }

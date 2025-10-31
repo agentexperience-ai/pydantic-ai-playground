@@ -49,15 +49,56 @@ export interface AgUiTokenUsage {
 }
 
 export interface AgUiStreamChunk {
-  type: 'message' | 'tool_call' | 'metadata' | 'RUN_STARTED' | 'TEXT_MESSAGE_START' | 'TEXT_MESSAGE_CONTENT' | 'TEXT_MESSAGE_END' | 'RUN_FINISHED' | 'THINKING_PART' | 'TOKEN_USAGE' | 'SUGGESTIONS' | 'TOOL_CALL' | 'ERROR';
-  data: Partial<AgUiResponse>;
+  // Standard AG-UI protocol event types
+  type:
+    | 'RUN_STARTED'
+    | 'RUN_FINISHED'
+    | 'RUN_ERROR'
+    | 'TEXT_MESSAGE_START'
+    | 'TEXT_MESSAGE_CONTENT'
+    | 'TEXT_MESSAGE_END'
+    | 'TEXT_MESSAGE_CHUNK'
+    | 'THINKING_START'
+    | 'THINKING_END'
+    | 'THINKING_TEXT_MESSAGE_START'
+    | 'THINKING_TEXT_MESSAGE_CONTENT'
+    | 'THINKING_TEXT_MESSAGE_END'
+    | 'TOOL_CALL_START'
+    | 'TOOL_CALL_ARGS'
+    | 'TOOL_CALL_END'
+    | 'TOOL_CALL_RESULT'
+    | 'TOOL_CALL_CHUNK'
+    | 'STATE_SNAPSHOT'
+    | 'STATE_DELTA'
+    | 'MESSAGES_SNAPSHOT'
+    | 'STEP_STARTED'
+    | 'STEP_FINISHED'
+    | 'CUSTOM'
+    | 'RAW';
+  data?: Partial<AgUiResponse> & {
+    name?: string;
+    value?: any;
+    usage?: AgUiTokenUsage;
+    tasks?: any[];
+  };
   session_id?: string;
+  // Standard AG-UI fields
+  delta?: string;
+  messageId?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  args?: Record<string, any>;
+  content?: string;
+  result?: any;
+  role?: string;
+  error?: string;
+  // Custom fields for our app
   thinking_part?: AgUiThinkingPart;
   usage?: AgUiTokenUsage;
   suggestions?: string[];
-  toolName?: string;
-  args?: Record<string, any>;
-  error?: string;
+  // Custom event fields
+  name?: string;
+  value?: any;
 }
 
 class AgUiClient {
@@ -126,57 +167,55 @@ class AgUiClient {
             try {
               const data = JSON.parse(line.slice(6));
 
-              // Handle AG-UI protocol events
+              // Handle standard AG-UI protocol events
               if (data.type === 'TEXT_MESSAGE_START') {
-                currentMessageId = data.messageId;
+                currentMessageId = data.message_id;
                 fullResponse = '';
-              } else if (data.type === 'TEXT_MESSAGE_CONTENT' && data.messageId === currentMessageId) {
-                fullResponse += data.delta;
+              } else if (data.type === 'TEXT_MESSAGE_CONTENT') {
+                if (data.delta) {
+                  fullResponse += data.delta;
+                }
               }
 
               if (onChunk) {
                 const chunkData: AgUiStreamChunk = {
-                  type: data.type || 'message',
+                  type: data.type || 'TEXT_MESSAGE_CONTENT',
                   data: {
                     message: data.delta || fullResponse,
-                    tool_calls: data.tool_calls,
                     metadata: {
                       streaming: data.type !== 'RUN_FINISHED',
                       complete: data.type === 'RUN_FINISHED',
-                      session_id: data.threadId,
+                      session_id: threadId,
                     },
                   },
-                  session_id: data.threadId,
+                  session_id: threadId,
+                  // Map AG-UI fields - use currentMessageId to track message across chunks
+                  delta: data.delta,
+                  messageId: currentMessageId || data.message_id,
+                  tool_call_id: data.tool_call_id,
+                  tool_name: data.tool_name,
+                  args: data.args,
+                  content: data.content,
+                  result: data.result,
+                  role: data.role,
+                  error: data.error,
                 };
 
-                // Handle thinking parts if present
-                if (data.thinking_part) {
+                // Handle thinking content
+                if (data.type === 'THINKING_TEXT_MESSAGE_CONTENT' && data.delta) {
                   chunkData.thinking_part = {
-                    type: data.thinking_part.type,
-                    content: data.thinking_part.content,
-                    id: data.thinking_part.id,
+                    type: 'reasoning',
+                    content: data.delta,
                   };
                 }
 
-                // Handle token usage if present
-                if (data.usage) {
-                  chunkData.usage = data.usage;
-                }
-
-                // Handle suggestions if present
-                if (data.suggestions) {
-                  chunkData.suggestions = data.suggestions;
-                }
-
-                // Handle tool calls if present
-                if (data.toolName) {
-                  chunkData.toolName = data.toolName;
-                  chunkData.args = data.args;
-                }
-
-                // Handle errors if present
-                if (data.error) {
-                  chunkData.error = data.error;
+                // Handle CUSTOM events for token usage and suggestions
+                if (data.type === 'CUSTOM') {
+                  if (data.name === 'token_usage' && data.value) {
+                    chunkData.usage = data.value;
+                  } else if (data.name === 'suggestions' && Array.isArray(data.value)) {
+                    chunkData.suggestions = data.value;
+                  }
                 }
 
                 onChunk(chunkData);
@@ -191,7 +230,8 @@ class AgUiClient {
       reader.releaseLock();
     }
 
-    return {
+    // Create properly typed response
+    const agUiResponse: AgUiResponse = {
       message: fullResponse,
       metadata: {
         streaming: false,
@@ -199,6 +239,8 @@ class AgUiClient {
         session_id: threadId,
       },
     };
+
+    return agUiResponse;
   }
 
   /**
